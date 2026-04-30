@@ -78,6 +78,7 @@ static double LambdaDQCD =   5.0;
 static int    nWorkers  =   10;
 static int    saveTSV   =    1;   // write raw TSV; set to 0 during scan
 static int    jetsVisOnly = 1;    // 1 = store visible 4-momenta in jets TSV; 0 = full jet 4-momenta
+static int    dijetOnly  =  0;   // 1 = only keep events with >= 2 jets (dijet topology)
 
 static void rs(Pythia& p, const std::string& key, double val) {
   std::ostringstream oss;
@@ -433,7 +434,8 @@ static void runWorker(int workerID, int nEvtWorker,
     double j2_vis_px = 0, j2_vis_py = 0;
     double j1_px=0, j1_py=0, j1_pz=0, j1_E=0;
     double j2_px=0, j2_py=0, j2_pz=0, j2_E=0;
-    std::vector<std::array<double,4>> lead_constits;          // visible constituents of leading jet
+    std::vector<std::array<double,4>> lead_constits;          // visible constituents of leading jet (substructure)
+    std::vector<std::array<double,4>> all_vis_constits;       // visible constituents of ALL passing jets (hemispheres)
     std::vector<std::pair<double,double>> jet_vis_vecs;       // (vis_px, vis_py) per passing jet
 
     for (const auto& jet : raw_jets) {
@@ -463,14 +465,20 @@ static void runWorker(int workerID, int nEvtWorker,
       ++n_jets;
       jet_vis_vecs.emplace_back(vis_px, vis_py);
 
-      // Track leading visible-pT jet for regression + thrust + dijet observables
+      // Accumulate all visible constituents for event-level hemisphere masses
+      for (const auto& c2 : jet.constituents()) {
+        if (c2.user_index() == TAG_INV) continue;
+        all_vis_constits.push_back({c2.px(), c2.py(), c2.pz(), c2.e()});
+      }
+
+      // Track leading visible-pT jet for regression + substructure observables
       if (vis_pt > lead_vis_pt) {
         j2_vis_px = j1_vis_px; j2_vis_py = j1_vis_py;
         sub_vis_pt  = lead_vis_pt;
         j1_vis_px   = vis_px;  j1_vis_py = vis_py;
         lead_vis_pt = vis_pt;
         lead_width  = (width_den > 0) ? width_num / width_den : 0.0;
-        // Save visible constituents for thrust and hemisphere masses
+        // Save visible constituents of leading jet for substructure (E2C, E3C, tauN)
         lead_constits.clear();
         for (const auto& c2 : jet.constituents()) {
           if (c2.user_index() == TAG_INV) continue;
@@ -500,6 +508,7 @@ static void runWorker(int workerID, int nEvtWorker,
     }
 
     if (n_jets < 1) continue;
+    if (dijetOnly && n_jets < 2) continue;
 
     double met = std::sqrt(evt_vis_px*evt_vis_px + evt_vis_py*evt_vis_py);
 
@@ -512,16 +521,14 @@ static void runWorker(int workerID, int nEvtWorker,
       spher = 2.0 * (disc > 0 ? (1.0 - std::sqrt(disc)) / 2.0 : 0.5);
     }
 
-    // ── Jet thrust and hemisphere masses (leading visible-pT jet) ──
-    // Thrust: T = max_{nhat} sum_i |pT_i . nhat| / sum_i |pT_i|
-    // Optimal nhat lies along one of the constituent pT directions (O(n^2) search).
+    // ── Jet thrust (leading jet) and event-level hemisphere masses ──
+    // jetThrust: T = max_{nhat} sum_i |pT_i . nhat| / sum_i |pT_i|  over leading-jet constituents.
+    // hemiMass1/2: split ALL visible event particles along the event-level transverse thrust axis.
     double thrust = 0.0, hemi_mass1 = 0.0, hemi_mass2 = 0.0;
     if (!lead_constits.empty()) {
       double pt_sum = 0;
       for (auto& c : lead_constits)
         pt_sum += std::sqrt(c[0]*c[0] + c[1]*c[1]);
-
-      double tx = 1.0, ty = 0.0;
       if (pt_sum > 0) {
         for (auto& ac : lead_constits) {
           double anorm = std::sqrt(ac[0]*ac[0] + ac[1]*ac[1]);
@@ -531,14 +538,34 @@ static void runWorker(int workerID, int nEvtWorker,
           for (auto& c : lead_constits)
             T_cand += std::fabs(c[0]*nx + c[1]*ny);
           T_cand /= pt_sum;
-          if (T_cand > thrust) { thrust = T_cand; tx = nx; ty = ny; }
+          if (T_cand > thrust) thrust = T_cand;
+        }
+      }
+    }
+    if (!all_vis_constits.empty()) {
+      // Event-level transverse thrust axis for hemisphere splitting
+      double pt_sum_ev = 0;
+      for (auto& c : all_vis_constits)
+        pt_sum_ev += std::sqrt(c[0]*c[0] + c[1]*c[1]);
+
+      double tx = 1.0, ty = 0.0, best_T = -1.0;
+      if (pt_sum_ev > 0) {
+        for (auto& ac : all_vis_constits) {
+          double anorm = std::sqrt(ac[0]*ac[0] + ac[1]*ac[1]);
+          if (anorm == 0) continue;
+          double nx = ac[0]/anorm, ny = ac[1]/anorm;
+          double T_cand = 0;
+          for (auto& c : all_vis_constits)
+            T_cand += std::fabs(c[0]*nx + c[1]*ny);
+          T_cand /= pt_sum_ev;
+          if (T_cand > best_T) { best_T = T_cand; tx = nx; ty = ny; }
         }
       }
 
-      // Split constituents into hemispheres along thrust axis
+      // Split all visible event particles into hemispheres along event thrust axis
       double h1_px=0, h1_py=0, h1_pz=0, h1_E=0;
       double h2_px=0, h2_py=0, h2_pz=0, h2_E=0;
-      for (auto& c : lead_constits) {
+      for (auto& c : all_vis_constits) {
         if (c[0]*tx + c[1]*ty >= 0) {
           h1_px += c[0]; h1_py += c[1]; h1_pz += c[2]; h1_E += c[3];
         } else {
@@ -592,7 +619,7 @@ static void runWorker(int workerID, int nEvtWorker,
     // z_i = pT_i / sum_pT  (pT fractions, visible+muon constituents only)
     // E2C = sum_{i<j}   z_i z_j dR_ij                         (beta=1, R=1)
     // E3C = sum_{i<j<k} z_i z_j z_k * dR_ij * dR_ik * dR_jk  (product of 3 angles)
-    // tau_N = sum_i z_i * min_k(dR(i, axis_k))                (exclusive kt axes, beta=1)
+    // tau_N = sum_i z_i * min_k(dR(i, axis_k))                (kT-seeded k-means axes, beta=1)
     double e2c = 0, e3c = 0, tau1 = 0, tau2 = 0, tau3 = 0;
     {
       int nc = (int)lead_constits.size();
@@ -637,7 +664,12 @@ static void runWorker(int workerID, int nEvtWorker,
               e3c += z_c[ii] * z_c[jj] * z_c[kk]
                    * dRmat[ii][jj] * dRmat[ii][kk] * dRmat[jj][kk];
 
-        // tau_N: exclusive kt reclustering of visible constituents to N subjets
+        // tau_N: kT-seeded k-means N-subjettiness (beta=1)
+        // Seeding from exclusive_jets(N) then iterating to convergence avoids the
+        // non-monotonicity of raw kT axes: the N=2 merged centroid can be closer to
+        // some constituents than either N=3 sub-axis, making tau3 > tau2 with raw kT.
+        // After independent minimisation for each N, std::min enforces the theoretical
+        // tau_N <= tau_{N-1} guarantee (N axes can always reproduce N-1 axes).
         std::vector<fastjet::PseudoJet> cpjs;
         cpjs.reserve(nc);
         for (auto& c : lead_constits)
@@ -646,28 +678,72 @@ static void runWorker(int workerID, int nEvtWorker,
         fastjet::JetDefinition kt_def(fastjet::kt_algorithm, 1.0);
         fastjet::ClusterSequence cs_sub(cpjs, kt_def);
 
-        // Returns tau_N using dRmat for constituent-to-axis distances
+        // k-means minimisation seeded from kT exclusive_jets(N)
         auto compute_tau = [&](int N) -> double {
           if (nc < N) return 0.0;
-          auto axes = cs_sub.exclusive_jets(N);
-          // Build eta/phi for each axis
+          auto seed = cs_sub.exclusive_jets(N);
           std::vector<double> ax_eta(N), ax_phi(N);
           for (int k = 0; k < N; ++k) {
-            ax_eta[k] = axes[k].eta();
-            ax_phi[k] = axes[k].phi();  // FastJet phi in [-pi, pi]
+            ax_eta[k] = seed[k].eta();
+            ax_phi[k] = seed[k].phi();
           }
+
+          // Iterative assign-then-update until axes converge
+          for (int iter = 0; iter < 100; ++iter) {
+            std::vector<int> asgn(nc, 0);
+            for (int ii = 0; ii < nc; ++ii) {
+              double min_d = 1e30;
+              for (int k = 0; k < N; ++k) {
+                double deta = eta_c[ii] - ax_eta[k];
+                double dphi = phi_c[ii] - ax_phi[k];
+                if (dphi >  PI) dphi -= 2*PI;
+                if (dphi < -PI) dphi += 2*PI;
+                double d = std::sqrt(deta*deta + dphi*dphi);
+                if (d < min_d) { min_d = d; asgn[ii] = k; }
+              }
+            }
+            // Update each axis to the E-scheme direction of its cluster
+            std::vector<double> spx(N,0), spy(N,0), spz(N,0);
+            for (int ii = 0; ii < nc; ++ii) {
+              int k = asgn[ii];
+              spx[k] += lead_constits[ii][0];
+              spy[k] += lead_constits[ii][1];
+              spz[k] += lead_constits[ii][2];
+            }
+            double max_shift = 0.0;
+            for (int k = 0; k < N; ++k) {
+              double pt2 = spx[k]*spx[k] + spy[k]*spy[k];
+              double p2  = pt2 + spz[k]*spz[k];
+              if (pt2 < 1e-20 || p2 < 1e-20) continue;
+              double p = std::sqrt(p2);
+              double new_eta = (p > std::fabs(spz[k]))
+                               ? 0.5*std::log((p+spz[k])/(p-spz[k]))
+                               : (spz[k] > 0 ? 1e9 : -1e9);
+              double new_phi = std::atan2(spy[k], spx[k]);
+              double deta = new_eta - ax_eta[k];
+              double dphi = new_phi - ax_phi[k];
+              if (dphi >  PI) dphi -= 2*PI;
+              if (dphi < -PI) dphi += 2*PI;
+              double shift = std::sqrt(deta*deta + dphi*dphi);
+              if (shift > max_shift) max_shift = shift;
+              ax_eta[k] = new_eta;
+              ax_phi[k] = new_phi;
+            }
+            if (max_shift < 1e-6) break;
+          }
+
           double tau = 0;
           for (int ii = 0; ii < nc; ++ii) {
-            double min_dR = 1e30;
+            double min_d = 1e30;
             for (int k = 0; k < N; ++k) {
               double deta = eta_c[ii] - ax_eta[k];
               double dphi = phi_c[ii] - ax_phi[k];
               if (dphi >  PI) dphi -= 2*PI;
               if (dphi < -PI) dphi += 2*PI;
               double d = std::sqrt(deta*deta + dphi*dphi);
-              if (d < min_dR) min_dR = d;
+              if (d < min_d) min_d = d;
             }
-            tau += z_c[ii] * min_dR;
+            tau += z_c[ii] * min_d;
           }
           return tau;
         };
@@ -675,6 +751,9 @@ static void runWorker(int workerID, int nEvtWorker,
         tau1 = compute_tau(1);
         tau2 = compute_tau(2);
         tau3 = compute_tau(3);
+        // Each N is minimised independently; clamp to enforce tau_N <= tau_{N-1}
+        tau2 = std::min(tau2, tau1);
+        tau3 = std::min(tau3, tau2);
       }
     }
 
@@ -712,6 +791,7 @@ int main(int argc, char* argv[]) {
   nWorkers   = cfgInt   (cfg, "nWorkers",   nWorkers);
   saveTSV    = cfgInt   (cfg, "save_tsv",    saveTSV);
   jetsVisOnly = cfgInt  (cfg, "jets_vis_only", jetsVisOnly);
+  dijetOnly   = cfgInt  (cfg, "dijet_only",    dijetOnly);
 
   if (Brl + rinv2 > 1.0) {
     std::cerr << "Error: Brl + rinv2 = " << Brl + rinv2

@@ -20,7 +20,8 @@ Usage:
     cfg_path   : path to config file (default: svj_regression.cfg)
     n_parallel : simultaneous points (default: cpu_count // nWorkers, min 1)
 
-Fixed physics params (mq, rinv2, Brl, jetR, nWorkers) are read from cfg_path.
+Fixed physics params (mq, Brl, jetR, nWorkers) are read from cfg_path.
+rinv2 is set equal to rinv per point (matching the scan convention).
 mPi and LambdaDQCD are derived per point:
     mPi        = mRho * (8.0 / 15.5)
     LambdaDQCD = mRho * (5.0 / 15.5)
@@ -154,7 +155,7 @@ def validate_point(point_idx, mZ, mRho, rinv, alphaD, fixed, n_events, n_workers
         'mPi':        mPi,
         'mRho':       mRho,
         'rinv':       rinv,
-        'rinv2':      fixed['rinv2'],
+        'rinv2':      rinv,   # match scan convention: rinv2 = rinv
         'Brl':        fixed['Brl'],
         'alphaD':     alphaD,
         'nEvent':     n_events,
@@ -162,6 +163,7 @@ def validate_point(point_idx, mZ, mRho, rinv, alphaD, fixed, n_events, n_workers
         'LambdaDQCD': LambdaDQCD,
         'nWorkers':   n_workers,
         'save_tsv':   0,
+        'dijet_only': 0,
     })
 
     live_params = run_svj(cfg_path)
@@ -200,12 +202,11 @@ def main():
 
     cfg      = read_cfg(cfg_path)
     mq       = cfg_float(cfg, 'mq',       4.0)
-    rinv2    = cfg_float(cfg, 'rinv2',    0.3)
     Brl      = cfg_float(cfg, 'Brl',      0.3)
     jetR     = cfg_float(cfg, 'jetR',     1.0)
     nWorkers = cfg_int  (cfg, 'nWorkers', 10)
 
-    fixed = {'mq': mq, 'rinv2': rinv2, 'Brl': Brl, 'jetR': jetR}
+    fixed = {'mq': mq, 'Brl': Brl, 'jetR': jetR}
 
     # n_parallel: how many svj_regression calls run simultaneously.
     # Default: pack as many as fit given nWorkers each, up to cpu_count.

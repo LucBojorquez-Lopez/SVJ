@@ -178,8 +178,9 @@ def main():
     jetR  = cfg_float(cfg, 'jetR',  1.0)
 
     # ── Sim settings ──
-    nEvent   = cfg_int(cfg, 'nEvent',   1000)
-    nWorkers = cfg_int(cfg, 'nWorkers',   10)
+    nEvent    = cfg_int(cfg, 'nEvent',    1000)
+    nWorkers  = cfg_int(cfg, 'nWorkers',    10)
+    dijetOnly = cfg_int(cfg, 'dijet_only',   0)
 
     # ── Output ──
     out_dir  = Path(cfg_str(cfg, 'output_dir',  'simulated'))
@@ -250,6 +251,7 @@ def main():
             'LambdaDQCD': LambdaQCD,
             'nWorkers':   nWorkers,
             'save_tsv':   0,
+            'dijet_only': dijetOnly,
         })
 
         scan_params[i, j, k, l] = [mZ, mRho, mPi, LambdaQCD, rinv, alphaD]
