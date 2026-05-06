@@ -54,18 +54,34 @@ def banner(msg):
 
 def run(cmd, check=True):
     """Run cmd, streaming output to stdout and overnight.log simultaneously."""
-    log(f"  CMD: {' '.join(str(c) for c in cmd)}\n")
+    # Insert -u (unbuffered) after the Python executable whenever we call a
+    # .py script, so the child process doesn't block-buffer its stdout into
+    # the pipe before we see it.
+    full_cmd = []
+    for i, c in enumerate(cmd):
+        full_cmd.append(c)
+        if str(c) == sys.executable and i + 1 < len(cmd) and str(cmd[i+1]).endswith('.py'):
+            full_cmd.append('-u')
+
+    log(f"  CMD: {' '.join(str(c) for c in full_cmd)}\n")
     with open(LOG_FILE, 'a') as logf:
         proc = subprocess.Popen(
-            cmd,
+            full_cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            bufsize=1,          # line-buffered on the parent side
         )
-        for line in proc.stdout:
+        # readline() is more reliable than "for line in proc.stdout"
+        # when streaming across a pipe
+        while True:
+            line = proc.stdout.readline()
+            if not line:
+                break
             sys.stdout.write(line)
             sys.stdout.flush()
             logf.write(line)
+            logf.flush()
         proc.wait()
     if check and proc.returncode != 0:
         log(f"\nERROR: command exited with code {proc.returncode}.")

@@ -77,8 +77,9 @@ static double jetR      =    1.0;
 static double LambdaDQCD =   5.0;
 static int    nWorkers  =   10;
 static int    saveTSV   =    1;   // write raw TSV; set to 0 during scan
-static int    jetsVisOnly = 1;    // 1 = store visible 4-momenta in jets TSV; 0 = full jet 4-momenta
+static int    jetsVisOnly = 1;    // 1 = store visible jet 4-momenta in jets_kinematics.tsv; 0 = full jet (incl. invisible)
 static int    dijetOnly  =  0;   // 1 = only keep events with >= 2 jets (dijet topology)
+static int    fullObs    =  1;   // 1 = compute all observables; 0 = only leadVisPt/leadWidth/MET (fast scan mode)
 
 static void rs(Pythia& p, const std::string& key, double val) {
   std::ostringstream oss;
@@ -399,21 +400,22 @@ static void runWorker(int workerID, int nEvtWorker,
       else
         ptag = TAG_VIS;
 
-      // Max electron and muon pT (from final-state particles)
-      if (aid == 11) {
-        double ept = std::sqrt(p.px()*p.px() + p.py()*p.py());
-        if (ept > max_ele_pt) max_ele_pt = ept;
-      }
-      if (aid == 13) {
-        double mpt = std::sqrt(p.px()*p.px() + p.py()*p.py());
-        if (mpt > max_mu_pt) max_mu_pt = mpt;
-      }
-
-      // Event-level transverse sphericity tensor: all visible+muon particles
-      if (ptag != TAG_INV) {
-        double px = p.px(), py = p.py();
-        s_xx += px*px; s_xy += px*py; s_yy += py*py;
-        s_pt2 += px*px + py*py;
+      if (fullObs) {
+        // Max electron and muon pT (from final-state particles)
+        if (aid == 11) {
+          double ept = std::sqrt(p.px()*p.px() + p.py()*p.py());
+          if (ept > max_ele_pt) max_ele_pt = ept;
+        }
+        if (aid == 13) {
+          double mpt = std::sqrt(p.px()*p.px() + p.py()*p.py());
+          if (mpt > max_mu_pt) max_mu_pt = mpt;
+        }
+        // Event-level transverse sphericity tensor: all visible+muon particles
+        if (ptag != TAG_INV) {
+          double px = p.px(), py = p.py();
+          s_xx += px*px; s_xy += px*py; s_yy += py*py;
+          s_pt2 += px*px + py*py;
+        }
       }
 
       fastjet::PseudoJet pj(p.px(), p.py(), p.pz(), p.e());
@@ -463,12 +465,14 @@ static void runWorker(int workerID, int nEvtWorker,
       evt_vis_px += vis_px;
       evt_vis_py += vis_py;
       ++n_jets;
-      jet_vis_vecs.emplace_back(vis_px, vis_py);
+      if (fullObs) jet_vis_vecs.emplace_back(vis_px, vis_py);
 
-      // Accumulate all visible constituents for event-level hemisphere masses
-      for (const auto& c2 : jet.constituents()) {
-        if (c2.user_index() == TAG_INV) continue;
-        all_vis_constits.push_back({c2.px(), c2.py(), c2.pz(), c2.e()});
+      if (fullObs) {
+        // Accumulate all visible constituents for event-level hemisphere masses
+        for (const auto& c2 : jet.constituents()) {
+          if (c2.user_index() == TAG_INV) continue;
+          all_vis_constits.push_back({c2.px(), c2.py(), c2.pz(), c2.e()});
+        }
       }
 
       // Track leading visible-pT jet for regression + substructure observables
@@ -478,11 +482,13 @@ static void runWorker(int workerID, int nEvtWorker,
         j1_vis_px   = vis_px;  j1_vis_py = vis_py;
         lead_vis_pt = vis_pt;
         lead_width  = (width_den > 0) ? width_num / width_den : 0.0;
-        // Save visible constituents of leading jet for substructure (E2C, E3C, tauN)
-        lead_constits.clear();
-        for (const auto& c2 : jet.constituents()) {
-          if (c2.user_index() == TAG_INV) continue;
-          lead_constits.push_back({c2.px(), c2.py(), c2.pz(), c2.e()});
+        if (fullObs) {
+          // Save visible constituents of leading jet for substructure (E2C, E3C, tauN)
+          lead_constits.clear();
+          for (const auto& c2 : jet.constituents()) {
+            if (c2.user_index() == TAG_INV) continue;
+            lead_constits.push_back({c2.px(), c2.py(), c2.pz(), c2.e()});
+          }
         }
       } else if (vis_pt > sub_vis_pt) {
         j2_vis_px = vis_px; j2_vis_py = vis_py;
@@ -584,7 +590,7 @@ static void runWorker(int workerID, int nEvtWorker,
     // ── pT balance: |pT_close + pT_far| / (pT_close + pT_far) ──
     // close/far = jet with smallest/largest delta-phi to MET, over all passing jets.
     double pt_bal = 0.0;
-    if (n_jets >= 2) {
+    if (fullObs && n_jets >= 2) {
       double met_phi = std::atan2(-evt_vis_py, -evt_vis_px);
       double min_dphi = 4.0, max_dphi = -1.0;
       int close_idx = 0, far_idx = 0;
@@ -607,7 +613,7 @@ static void runWorker(int workerID, int nEvtWorker,
 
     // ── delta-phi(MET, dijet): azimuthal angle between MET and j1+j2 ──
     double dphi_met_dijet = 0.0;
-    if (n_jets >= 2) {
+    if (fullObs && n_jets >= 2) {
       double dijet_phi = std::atan2(j1_vis_py + j2_vis_py, j1_vis_px + j2_vis_px);
       double met_phi   = std::atan2(-evt_vis_py, -evt_vis_px);
       double dphi = std::fabs(dijet_phi - met_phi);
@@ -664,12 +670,12 @@ static void runWorker(int workerID, int nEvtWorker,
               e3c += z_c[ii] * z_c[jj] * z_c[kk]
                    * dRmat[ii][jj] * dRmat[ii][kk] * dRmat[jj][kk];
 
-        // tau_N: kT-seeded k-means N-subjettiness (beta=1)
-        // Seeding from exclusive_jets(N) then iterating to convergence avoids the
-        // non-monotonicity of raw kT axes: the N=2 merged centroid can be closer to
-        // some constituents than either N=3 sub-axis, making tau3 > tau2 with raw kT.
-        // After independent minimisation for each N, std::min enforces the theoretical
-        // tau_N <= tau_{N-1} guarantee (N axes can always reproduce N-1 axes).
+        // tau_N: kT-seeded k-means N-subjettiness (beta=1).
+        // For N>1, two seeds are tried: the standard kT exclusive_jets(N) seed, and a
+        // warm-start seeded with the previous level's converged axes plus the Nth kT jet.
+        // At initialisation the warm-start satisfies tau_N <= tau_{N-1} (the extra axis
+        // can only reduce each constituent's minimum distance), so k-means converges to
+        // a result <= tau_{N-1} — no post-hoc clamping required.
         std::vector<fastjet::PseudoJet> cpjs;
         cpjs.reserve(nc);
         for (auto& c : lead_constits)
@@ -678,17 +684,10 @@ static void runWorker(int workerID, int nEvtWorker,
         fastjet::JetDefinition kt_def(fastjet::kt_algorithm, 1.0);
         fastjet::ClusterSequence cs_sub(cpjs, kt_def);
 
-        // k-means minimisation seeded from kT exclusive_jets(N)
-        auto compute_tau = [&](int N) -> double {
-          if (nc < N) return 0.0;
-          auto seed = cs_sub.exclusive_jets(N);
-          std::vector<double> ax_eta(N), ax_phi(N);
-          for (int k = 0; k < N; ++k) {
-            ax_eta[k] = seed[k].eta();
-            ax_phi[k] = seed[k].phi();
-          }
-
-          // Iterative assign-then-update until axes converge
+        // Run k-means from given axes (modified in-place); returns converged tau.
+        auto run_kmeans = [&](int N,
+                              std::vector<double>& ax_eta,
+                              std::vector<double>& ax_phi) -> double {
           for (int iter = 0; iter < 100; ++iter) {
             std::vector<int> asgn(nc, 0);
             for (int ii = 0; ii < nc; ++ii) {
@@ -702,7 +701,6 @@ static void runWorker(int workerID, int nEvtWorker,
                 if (d < min_d) { min_d = d; asgn[ii] = k; }
               }
             }
-            // Update each axis to the E-scheme direction of its cluster
             std::vector<double> spx(N,0), spy(N,0), spz(N,0);
             for (int ii = 0; ii < nc; ++ii) {
               int k = asgn[ii];
@@ -731,7 +729,6 @@ static void runWorker(int workerID, int nEvtWorker,
             }
             if (max_shift < 1e-6) break;
           }
-
           double tau = 0;
           for (int ii = 0; ii < nc; ++ii) {
             double min_d = 1e30;
@@ -748,12 +745,48 @@ static void runWorker(int workerID, int nEvtWorker,
           return tau;
         };
 
-        tau1 = compute_tau(1);
-        tau2 = compute_tau(2);
-        tau3 = compute_tau(3);
-        // Each N is minimised independently; clamp to enforce tau_N <= tau_{N-1}
-        tau2 = std::min(tau2, tau1);
-        tau3 = std::min(tau3, tau2);
+        // tau1: single kT seed; ax1e/ax1p hold converged axis for tau2 warm-start
+        std::vector<double> ax1e, ax1p;
+        if (nc >= 1) {
+          auto s1 = cs_sub.exclusive_jets(1);
+          ax1e = {s1[0].eta()};
+          ax1p = {s1[0].phi()};
+          tau1 = run_kmeans(1, ax1e, ax1p);
+        }
+
+        // tau2: kT seed AND warm-start [ax1_opt, kT-2nd]; ax2e/ax2p hold best axes
+        std::vector<double> ax2e, ax2p;
+        if (nc >= 2) {
+          auto s2 = cs_sub.exclusive_jets(2);
+
+          std::vector<double> e2a = {s2[0].eta(), s2[1].eta()};
+          std::vector<double> p2a = {s2[0].phi(), s2[1].phi()};
+          double tau2a = run_kmeans(2, e2a, p2a);
+
+          // Warm-start: ax1 optimum + kT-2nd jet.  Initial tau <= tau1 by construction.
+          std::vector<double> e2b = {ax1e[0], s2[1].eta()};
+          std::vector<double> p2b = {ax1p[0], s2[1].phi()};
+          double tau2b = run_kmeans(2, e2b, p2b);
+
+          if (tau2a <= tau2b) { tau2 = tau2a; ax2e = e2a; ax2p = p2a; }
+          else                { tau2 = tau2b; ax2e = e2b; ax2p = p2b; }
+        }
+
+        // tau3: kT seed AND warm-start [ax2_opt_0, ax2_opt_1, kT-3rd]
+        if (nc >= 3) {
+          auto s3 = cs_sub.exclusive_jets(3);
+
+          std::vector<double> e3a = {s3[0].eta(), s3[1].eta(), s3[2].eta()};
+          std::vector<double> p3a = {s3[0].phi(), s3[1].phi(), s3[2].phi()};
+          double tau3a = run_kmeans(3, e3a, p3a);
+
+          // Warm-start: both ax2 optima + kT-3rd jet.  Initial tau <= tau2 by construction.
+          std::vector<double> e3b = {ax2e[0], ax2e[1], s3[2].eta()};
+          std::vector<double> p3b = {ax2p[0], ax2p[1], s3[2].phi()};
+          double tau3b = run_kmeans(3, e3b, p3b);
+
+          tau3 = std::min(tau3a, tau3b);
+        }
       }
     }
 
@@ -792,6 +825,7 @@ int main(int argc, char* argv[]) {
   saveTSV    = cfgInt   (cfg, "save_tsv",    saveTSV);
   jetsVisOnly = cfgInt  (cfg, "jets_vis_only", jetsVisOnly);
   dijetOnly   = cfgInt  (cfg, "dijet_only",    dijetOnly);
+  fullObs     = cfgInt  (cfg, "full_obs",      fullObs);
 
   if (Brl + rinv2 > 1.0) {
     std::cerr << "Error: Brl + rinv2 = " << Brl + rinv2

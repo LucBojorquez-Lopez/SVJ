@@ -1,0 +1,31 @@
+# ── 0. Pick a parent directory and go there ───────────────────────────────────
+mkdir -p ~/DarkQCD/PYTHIAplaythings && cd ~/DarkQCD/PYTHIAplaythings
+
+# ── 1. FastJet 3.4.2 ─────────────────────────────────────────────────────────
+# Must be named "fastjet3" and locally installed so bin/fastjet-config exists
+wget http://fastjet.fr/repo/fastjet-3.4.2.tar.gz
+tar xzf fastjet-3.4.2.tar.gz
+cd fastjet-3.4.2
+./configure --prefix=$PWD/../fastjet3   # installs into the sibling dir
+make -j$(nproc)
+make install
+cd ..
+
+# ── 2. PYTHIA 8.317 ──────────────────────────────────────────────────────────
+# Must be named "pythia8317"; used in-place (no make install needed)
+wget https://pythia.org/download/pythia83/pythia8317.tgz
+tar xzf pythia8317.tgz        # already creates pythia8317/
+cd pythia8317
+./configure
+make -j$(nproc)
+cd ..
+
+# ── 3. Clone the repo ─────────────────────────────────────────────────────────
+git clone <your-repo-url> mySVJ
+cd mySVJ
+
+# ── 4. Build the binary ───────────────────────────────────────────────────────
+make svj_regression
+
+# ── 5. Python dependencies ────────────────────────────────────────────────────
+pip install numpy scipy scikit-learn

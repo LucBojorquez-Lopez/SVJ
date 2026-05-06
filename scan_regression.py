@@ -181,6 +181,7 @@ def main():
     nEvent    = cfg_int(cfg, 'nEvent',    1000)
     nWorkers  = cfg_int(cfg, 'nWorkers',    10)
     dijetOnly = cfg_int(cfg, 'dijet_only',   0)
+    fullObs   = cfg_int(cfg, 'full_obs',     1)
 
     # ── Output ──
     out_dir  = Path(cfg_str(cfg, 'output_dir',  'simulated'))
@@ -252,6 +253,7 @@ def main():
             'nWorkers':   nWorkers,
             'save_tsv':   0,
             'dijet_only': dijetOnly,
+            'full_obs':   fullObs,
         })
 
         scan_params[i, j, k, l] = [mZ, mRho, mPi, LambdaQCD, rinv, alphaD]

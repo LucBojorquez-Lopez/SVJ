@@ -164,6 +164,7 @@ def validate_point(point_idx, mZ, mRho, rinv, alphaD, fixed, n_events, n_workers
         'nWorkers':   n_workers,
         'save_tsv':   0,
         'dijet_only': 0,
+        'full_obs':   0,
     })
 
     live_params = run_svj(cfg_path)
