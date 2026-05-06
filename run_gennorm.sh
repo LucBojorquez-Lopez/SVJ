@@ -16,14 +16,15 @@ set -euo pipefail
 cd $SLURM_SUBMIT_DIR
 mkdir -p logs simulated/gennorm
 
-conda activate dark || { echo "ERROR: conda activate failed"; exit 1; }
+PYTHON=~/miniconda3/envs/dark/bin/python
 
 echo "=== job $SLURM_JOB_ID started $(date) ==="
 echo "    node:  $SLURMD_NODENAME"
 echo "    cpus:  $SLURM_CPUS_ON_NODE"
+echo "    python: $($PYTHON --version)"
 echo ""
 
-python scan_regression_gennorm.py --job-index $SLURM_ARRAY_TASK_ID --n-jobs 4
+$PYTHON scan_regression_gennorm.py --job-index $SLURM_ARRAY_TASK_ID --n-jobs 4
 
 echo ""
 echo "=== job $SLURM_JOB_ID finished $(date) ==="
