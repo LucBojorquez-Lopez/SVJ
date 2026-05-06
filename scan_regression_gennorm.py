@@ -58,6 +58,7 @@ import numpy as np
 import scipy.stats as st
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
+import argparse
 
 BINARY = './svj_regression'
 
@@ -227,12 +228,79 @@ def _save(out_file, mZ_vals, mRho_vals, rinv_vals, alphaD_vals,
     )
 
 
+# ── Merge helper ───────────────────────────────────────────────────────────────
+
+def _merge(out_dir, n_jobs):
+    """
+    Combine gennorm_scan_0.npz … gennorm_scan_{n_jobs-1}.npz
+    into gennorm_scan.npz.  Run after all array jobs finish:
+        python scan_regression_gennorm.py --merge --n-jobs 4
+    """
+    files = [out_dir / f'gennorm_scan_{i}.npz' for i in range(n_jobs)]
+    missing = [str(f) for f in files if not f.exists()]
+    if missing:
+        print(f"Error: missing files: {missing}")
+        sys.exit(1)
+
+    d0               = np.load(files[0], allow_pickle=True)
+    corr_params      = np.array(d0['corr_params'])
+    transform_params = np.array(d0['transform_params'])
+    scan_params      = np.array(d0['scan_params'])
+
+    for f in files[1:]:
+        d    = np.load(f, allow_pickle=True)
+        cp   = np.array(d['corr_params'])
+        tp   = np.array(d['transform_params'])
+        sp   = np.array(d['scan_params'])
+        mask = np.all(np.isfinite(cp), axis=-1)
+        corr_params[mask]      = cp[mask]
+        transform_params[mask] = tp[mask]
+        sp_mask = np.all(np.isfinite(sp), axis=-1)
+        scan_params[sp_mask]   = sp[sp_mask]
+
+    out_file = out_dir / 'gennorm_scan.npz'
+    np.savez(
+        out_file,
+        mZ_vals          = d0['mZ_vals'],
+        mRho_vals        = d0['mRho_vals'],
+        rinv_vals        = d0['rinv_vals'],
+        alphaD_vals      = d0['alphaD_vals'],
+        corr_params      = corr_params,
+        transform_params = transform_params,
+        obs_names        = d0['obs_names'],
+        scan_params      = scan_params,
+        scan_param_names = d0['scan_param_names'],
+    )
+    n_done  = int(np.sum(np.all(np.isfinite(corr_params), axis=-1)))
+    n_total = corr_params[..., 0].size
+    print(f"Merged {n_jobs} files → {out_file}")
+    print(f"  {n_done} / {n_total} points complete")
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
-    scan_cfg_path = 'scan_regression.cfg'
-    if len(sys.argv) > 1:
-        scan_cfg_path = sys.argv[1]
+    parser = argparse.ArgumentParser()
+    parser.add_argument('cfg', nargs='?', default='scan_regression.cfg')
+    parser.add_argument('--job-index', type=int, default=0,
+                        help='Index of this job slice (0-based)')
+    parser.add_argument('--n-jobs',    type=int, default=1,
+                        help='Total number of parallel job slices')
+    parser.add_argument('--merge', action='store_true',
+                        help='Merge per-job NPZs into gennorm_scan.npz and exit')
+    args = parser.parse_args()
+
+    job_index = args.job_index
+    n_jobs    = args.n_jobs
+
+    out_dir = Path('simulated') / 'gennorm'   # needed early for --merge
+
+    if args.merge:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        _merge(out_dir, n_jobs)
+        return
+
+    scan_cfg_path = args.cfg
 
     if not os.path.exists(scan_cfg_path):
         print(f"Error: config file '{scan_cfg_path}' not found.")
@@ -266,7 +334,8 @@ def main():
     chk_every= cfg_int  (cfg, 'checkpoint_every', 200)
 
     out_dir  = Path(cfg_str(cfg, 'output_dir', 'simulated')) / 'gennorm'
-    out_file = out_dir / 'gennorm_scan.npz'
+    fname    = f'gennorm_scan_{job_index}.npz' if n_jobs > 1 else 'gennorm_scan.npz'
+    out_file = out_dir / fname
     out_dir.mkdir(parents=True, exist_ok=True)
 
     mZ_vals     = np.linspace(mZ_min,     mZ_max,     mZ_n)
@@ -296,33 +365,40 @@ def main():
         except Exception as e:
             print(f"Warning: could not load existing results ({e}); starting fresh.")
 
-    # Build task list, skipping completed points
-    tasks = []
-    for (i, mZ), (j, mRho), (k, rinv), (l, alphaD) in itertools.product(
-            enumerate(mZ_vals), enumerate(mRho_vals),
-            enumerate(rinv_vals), enumerate(alphaD_vals)):
+    # Enumerate all grid points in a fixed order, then assign to jobs round-robin
+    # so each job always owns the same deterministic 1/n_jobs slice of the grid.
+    all_points = list(itertools.product(
+        enumerate(mZ_vals), enumerate(mRho_vals),
+        enumerate(rinv_vals), enumerate(alphaD_vals)))
 
+    # scan_params is cheap; fill for all points regardless of job slice
+    for (i, mZ), (j, mRho), (k, rinv), (l, alphaD) in all_points:
         mPi       = mRho * MRHO_MPION_RATIO
         LambdaQCD = mRho * MRHO_LAMBDA_RATIO
         scan_params[i, j, k, l] = [mZ, mRho, mPi, LambdaQCD, rinv, alphaD]
 
+    # Build task list for this job's slice, skipping already-done points
+    tasks = []
+    for flat_idx, ((i, mZ), (j, mRho), (k, rinv), (l, alphaD)) in enumerate(all_points):
+        if flat_idx % n_jobs != job_index:
+            continue
         if np.all(np.isfinite(corr_params[i, j, k, l])):
-            continue  # already done
-
-        # Unique task_id → unique /tmp paths, safe for concurrent workers
-        task_id = i * (mRho_n * rinv_n * alphaD_n) \
-                + j * (rinv_n * alphaD_n) \
-                + k * alphaD_n + l
+            continue  # already done (resumption)
+        mPi       = scan_params[i, j, k, l, 2]
+        LambdaQCD = scan_params[i, j, k, l, 3]
+        task_id   = i * (mRho_n * rinv_n * alphaD_n) \
+                  + j * (rinv_n * alphaD_n) \
+                  + k * alphaD_n + l
         tasks.append((task_id, i, j, k, l,
                       mZ, mRho, mPi, LambdaQCD, rinv, alphaD,
                       mq, Brl, jetR, nEvent, nWorkers))
 
     n_todo = len(tasks)
-    print(f"SVJ gennorm scan")
-    print(f"  Grid:    {mZ_n}×{mRho_n}×{rinv_n}×{alphaD_n} = {total} points")
+    job_str = f"job {job_index}/{n_jobs-1}  " if n_jobs > 1 else ""
+    print(f"SVJ gennorm scan  {job_str}({n_outer} outer × {nWorkers} C++ threads)")
+    print(f"  Grid:    {mZ_n}×{mRho_n}×{rinv_n}×{alphaD_n} = {total} total  "
+          f"({total // n_jobs} this job)")
     print(f"  To do:   {n_todo}  (already done: {n_preloaded})")
-    print(f"  Workers: {n_outer} outer × {nWorkers} internal C++ threads "
-          f"= {n_outer * nWorkers} total hardware threads")
     print(f"  Events/point: {nEvent}")
     print(f"  Output:  {out_file}\n")
 
