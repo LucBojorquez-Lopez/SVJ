@@ -51,6 +51,11 @@ static int cfgInt(const std::map<std::string,std::string>& cfg,
   auto it = cfg.find(key);
   return (it != cfg.end()) ? std::stoi(it->second) : def;
 }
+static std::string cfgStr(const std::map<std::string,std::string>& cfg,
+                           const std::string& key, const std::string& def) {
+  auto it = cfg.find(key);
+  return (it != cfg.end()) ? it->second : def;
+}
 
 // user_index tags
 static const int TAG_VIS  = 0;
@@ -81,6 +86,8 @@ static int    saveTSV   =    1;   // write raw TSV; set to 0 during scan
 static int    jetsVisOnly = 1;    // 1 = store visible jet 4-momenta in jets_kinematics.tsv; 0 = full jet (incl. invisible)
 static int    dijetOnly  =  0;   // 1 = only keep events with >= 2 jets (dijet topology)
 static int    fullObs    =  1;   // 1 = compute all observables; 0 = only leadVisPt/leadWidth/MET (fast scan mode)
+static std::string tsvFile    = "data/regression/jets_default.tsv";
+static std::string tsvKinFile = "data/regression/jets_kinematics.tsv";
 
 static void rs(Pythia& p, const std::string& key, double val) {
   std::ostringstream oss;
@@ -823,10 +830,12 @@ int main(int argc, char* argv[]) {
   jetR       = cfgDouble(cfg, "jetR",       jetR);
   LambdaDQCD = cfgDouble(cfg, "LambdaDQCD", LambdaDQCD);
   nWorkers   = cfgInt   (cfg, "nWorkers",   nWorkers);
-  saveTSV    = cfgInt   (cfg, "save_tsv",    saveTSV);
+  saveTSV    = cfgInt   (cfg, "save_tsv",      saveTSV);
   jetsVisOnly = cfgInt  (cfg, "jets_vis_only", jetsVisOnly);
   dijetOnly   = cfgInt  (cfg, "dijet_only",    dijetOnly);
   fullObs     = cfgInt  (cfg, "full_obs",      fullObs);
+  tsvFile     = cfgStr  (cfg, "tsv_file",      tsvFile);
+  tsvKinFile  = cfgStr  (cfg, "tsv_kin_file",  tsvKinFile);
 
   if (Brl + rinv2 > 1.0) {
     std::cerr << "Error: Brl + rinv2 = " << Brl + rinv2
@@ -851,9 +860,12 @@ int main(int argc, char* argv[]) {
 
   // Optionally write raw TSVs (skipped during scan via save_tsv = 0)
   if (saveTSV) {
-    std::filesystem::create_directories("data/regression");
+    auto tsvDir = std::filesystem::path(tsvFile).parent_path();
+    if (!tsvDir.empty()) std::filesystem::create_directories(tsvDir);
+    auto tsvKinDir = std::filesystem::path(tsvKinFile).parent_path();
+    if (!tsvKinDir.empty()) std::filesystem::create_directories(tsvKinDir);
 
-    std::ofstream fOut("data/regression/jets_default.tsv");
+    std::ofstream fOut(tsvFile);
     fOut << "# leadVisPt\tleadWidth\tMET"
             "\tmaxElePt\tmaxMuPt"
             "\tjetThrust\ttransSphericity"
@@ -871,7 +883,7 @@ int main(int argc, char* argv[]) {
              << r[11] << "\t" << r[12] << "\t"
              << r[13] << "\t" << r[14] << "\t" << r[15] << "\n";
 
-    std::ofstream fJets("data/regression/jets_kinematics.tsv");
+    std::ofstream fJets(tsvKinFile);
     fJets << std::scientific << std::setprecision(6);
     fJets << "# n_jets\tj1_px\tj1_py\tj1_pz\tj1_E\tj2_px\tj2_py\tj2_pz\tj2_E\n";
     for (const auto& rows : jetResults)

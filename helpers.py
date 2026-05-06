@@ -2,6 +2,7 @@
 
 import numpy as np
 import scipy.special as sp
+import scipy.stats as st
 from scipy.interpolate import RegularGridInterpolator
 from concurrent.futures import ProcessPoolExecutor
 try:
@@ -213,3 +214,38 @@ def corner_kld_grid(n_workers=10):
             result[key] = val
 
     return result
+
+def BoxCox(datap, l):
+    mask = (datap > 0) & (datap < np.inf)
+    print(len(datap) - np.sum(mask), "data points were <= 0 and will be ignored in the Box-Cox transformation")
+    data = datap[mask]
+    if l==0:
+        return np.log(data)
+    elif (l <= 1) and (l > 0):
+        return (data**l - 1)/l
+    elif l==-1:
+        return data
+    else:
+        raise ValueError('l must be in the range (0,1) or equal to 0')
+    
+def get_common_finite(data1, data2):
+    mask = np.isfinite(data1) & np.isfinite(data2) & (data1 > 0) & (data2 > 0)
+    return data1[mask], data2[mask]
+
+def preprocess_data(data):
+    return data[np.all((data > 0) & (data < np.inf), axis = 1)]
+
+def transform_data(data):
+    p_data = preprocess_data(data)
+    nobservables = p_data.shape[1]
+    params  = np.empty((nobservables, 4))
+    transformed_data = np.empty(p_data.shape)
+    for i in range(nobservables):
+        x_bc, lam = st.boxcox(p_data[:,i])
+        beta, loc, scale = st.gennorm.fit(x_bc)
+        params[i,:] = lam, beta, loc, scale
+        cdf_vals = np.clip(st.gennorm.cdf(x_bc, beta, loc=loc, scale=scale), 1e-10, 1 - 1e-10)
+        transformed_data[:,i] = st.norm.ppf(cdf_vals)
+    
+    return transformed_data, params
+
