@@ -1,6 +1,0 @@
-=== job 10655258 started Wed May  6 11:50:55 EDT 2026 ===
-    node:  holy7c18205
-    cpus:  48
-    python: Python 3.12.11
-
-Error: binary './svj_regression' not found. Run 'make svj_regression' first.

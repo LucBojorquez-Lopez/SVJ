@@ -4,7 +4,7 @@
 #SBATCH --nodes=1                     # each job on its own node (shared memory required)
 #SBATCH -c 48
 #SBATCH -p arguelles_delgado
-#SBATCH --mem=6G
+#SBATCH --mem=16G
 #SBATCH -t 0-10:00
 #SBATCH --output=logs/gennorm_%A_%a.out
 #SBATCH --error=logs/gennorm_%A_%a.err
