@@ -233,7 +233,7 @@ def get_common_finite(data1, data2):
     return data1[mask], data2[mask]
 
 def preprocess_data(data):
-    return data[np.all((data > 0) & (data < np.inf), axis = 1)]
+    return data[np.all((data > 1e-6) & (data < np.inf), axis = 1)]
 
 def transform_data(data):
     p_data = preprocess_data(data)
@@ -246,6 +246,109 @@ def transform_data(data):
         params[i,:] = lam, beta, loc, scale
         cdf_vals = np.clip(st.gennorm.cdf(x_bc, beta, loc=loc, scale=scale), 1e-10, 1 - 1e-10)
         transformed_data[:,i] = st.norm.ppf(cdf_vals)
-    
+
     return transformed_data, params
+
+
+# ── Gennorm scan grid interpolator ────────────────────────────────────────────
+
+_gn = np.load('simulated/gennorm/gennorm_scan.npz', allow_pickle=True)
+
+_gn_mZ_vals     = _gn['mZ_vals']
+_gn_mRho_vals   = _gn['mRho_vals']
+_gn_rinv_vals   = _gn['rinv_vals']
+_gn_alphaD_vals = _gn['alphaD_vals']
+
+_GN_N_OBS  = 11
+_GN_N_CORR = 55   # C(11,2)
+
+# Concatenate corr_params (55) and flattened transform_params (11×4=44) → (grid..., 99)
+_gn_corr_arr = np.array(_gn['corr_params'])        # (8,8,8,8,55)
+_gn_tf_arr   = np.array(_gn['transform_params'])    # (8,8,8,8,11,4)
+_gn_all      = np.concatenate(
+    [_gn_corr_arr,
+     _gn_tf_arr.reshape(_gn_tf_arr.shape[:4] + (_GN_N_OBS * 4,))],
+    axis=-1,
+)  # (8,8,8,8,99)
+
+_gn_interp = RegularGridInterpolator(
+    (_gn_mZ_vals, _gn_mRho_vals, _gn_rinv_vals, _gn_alphaD_vals),
+    _gn_all,
+    method='linear',
+    bounds_error=True,
+)
+
+
+def interpolate_gennorm_params(mZ, mRho, rinv, alphaD):
+    """
+    Return (corr_params_55, transform_params_11x4) interpolated at (mZ, mRho, rinv, alphaD)
+    via linear interpolation on the precomputed gennorm scan grid.
+
+    Parameters
+    ----------
+    mZ, mRho, rinv, alphaD : float
+        Physical parameters within the grid boundaries.
+
+    Returns
+    -------
+    corr_params : np.ndarray, shape (55,)
+        Upper-triangle entries of the 11×11 MVN correlation matrix.
+    transform_params : np.ndarray, shape (11, 4)
+        [lam, beta, loc, scale] per observable (Box-Cox lambda first).
+    """
+    params_99 = _gn_interp([[mZ, mRho, rinv, alphaD]])[0]
+    corr_55 = params_99[:_GN_N_CORR]
+    tf_11x4 = params_99[_GN_N_CORR:].reshape(_GN_N_OBS, 4)
+    return corr_55, tf_11x4
+
+
+def sample_svj(corr_params_55, transform_params_11x4, n_samples=100_000, rng=None):
+    """
+    Draw n_samples from the joint distribution of the 11 SVJ observables.
+
+    Inverse pipeline per observable i:
+      standard-normal z  →  normal CDF  →  gennorm quantile (beta, loc, scale)
+                         →  inverse Box-Cox (lam)  →  original space
+
+    Parameters
+    ----------
+    corr_params_55 : array-like, shape (55,)
+        Upper-triangle entries of the 11×11 correlation matrix (variances fixed to 1).
+    transform_params_11x4 : array-like, shape (11, 4)
+        [lam, beta, loc, scale] per observable.
+    n_samples : int
+        Number of samples to draw (default 10 000).
+    rng : np.random.Generator or None
+        Optional random generator for reproducibility.
+
+    Returns
+    -------
+    X : np.ndarray, shape (n_samples, 11)
+        Samples in the original (untransformed) observable space.
+    """
+    corr_55 = np.asarray(corr_params_55)
+    tf      = np.asarray(transform_params_11x4)   # (11, 4)
+
+    # Reconstruct symmetric correlation matrix from upper triangle
+    R = np.zeros((_GN_N_OBS, _GN_N_OBS))
+    R[np.triu_indices(_GN_N_OBS, k=1)] = corr_55
+    R += R.T
+    np.fill_diagonal(R, 1.0)
+
+    # Sample from MVN(0, R)
+    mu = np.zeros(_GN_N_OBS)
+    if rng is None:
+        z = np.random.multivariate_normal(mu, R, size=n_samples)
+    else:
+        z = rng.multivariate_normal(mu, R, size=n_samples)
+
+    # Invert transform per marginal
+    X = np.empty_like(z)
+    for i in range(_GN_N_OBS):
+        lam, beta, loc, scale = tf[i]
+        u       = np.clip(st.norm.cdf(z[:, i]), 1e-10, 1.0 - 1e-10)
+        x_bc    = st.gennorm.ppf(u, beta, loc=loc, scale=scale)
+        X[:, i] = sp.inv_boxcox(x_bc, lam)
+
+    return X
 
