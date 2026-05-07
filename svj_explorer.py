@@ -103,7 +103,7 @@ def _load_true_data():
     mask_cols = np.array([0, 1, 2, 4, 5, 7, 8, 11, 12, 13, 14, 15])
     data_to_fit = dataL[:, mask_cols].copy()
     data_to_fit[:, 4] = 1 - data_to_fit[:, 4]          # thrust → 1 - thrust
-    return helpers.preprocess_data(data_to_fit)
+    return _add_derived(helpers.preprocess_data(data_to_fit))
 
 
 # ── Observable metadata ───────────────────────────────────────────────────────
@@ -111,6 +111,7 @@ def _load_true_data():
 _OBS_NAMES = [
     'leadVisPt', 'leadWidth', 'MET', 'maxMuPt', 'inv_jetThrust',
     'hemiMass1', 'hemiMass2', 'e2c', 'e3c', 'tau1', 'tau2', 'tau3',
+    'mass2/mass1', 'e3c/e2c', 'tau2/tau1', 'tau3/tau2',
 ]
 
 _OBS_LABELS = [
@@ -126,7 +127,24 @@ _OBS_LABELS = [
     r'$\tau_1$',
     r'$\tau_2$',
     r'$\tau_3$',
+    r'$m_2 / m_1$',
+    r'$e_3^c / e_2^c$',
+    r'$\tau_2 / \tau_1$',
+    r'$\tau_3 / \tau_2$',
 ]
+
+# ── Derived observables (computed from base 12 columns) ──────────────────────
+
+def _add_derived(X):
+    """Append 4 ratio columns to an N×12 array, returning N×16."""
+    eps = 1e-10
+    r_mass  = X[:, 6] / np.maximum(X[:, 5], eps)   # hemiMass2 / hemiMass1
+    r_e     = X[:, 8] / np.maximum(X[:, 7], eps)    # e3c / e2c
+    r_tau21 = X[:, 10] / np.maximum(X[:, 9], eps)   # tau2 / tau1
+    r_tau32 = X[:, 11] / np.maximum(X[:, 10], eps)  # tau3 / tau2
+    return np.hstack([X, r_mass[:, None], r_e[:, None],
+                      r_tau21[:, None], r_tau32[:, None]])
+
 
 # ── Fixed axis ranges (computed once from grid corners at import) ─────────────
 
@@ -152,11 +170,12 @@ def _compute_fixed_ranges(n_corner_samples=3_000):
                         pass
 
     if not chunks:
-        return [(0.0, 1.0)] * 12
+        return [(0.0, 1.0)] * len(_OBS_NAMES)
 
     all_s = np.vstack(chunks)
+    all_s = _add_derived(all_s)
     ranges = []
-    for i in range(12):
+    for i in range(len(_OBS_NAMES)):
         col = all_s[:, i]
         col = col[np.isfinite(col)]
         if len(col) < 10:
@@ -272,6 +291,29 @@ def show(n_samples=10_000):
                     w_xfeat, w_yfeat, w_axes,
                     w_nsamples, w_nvalidate, w_validate]
 
+    # ── Cut widgets (per-observable range sliders) ────────────────────────────
+    def _make_cut_slider(i):
+        lo, hi = _FIXED_RANGES[i]
+        span   = hi - lo if hi > lo else 1.0
+        step   = span / 200
+        return widgets.FloatRangeSlider(
+            value=[lo, hi],
+            min=lo, max=hi, step=step,
+            description=_OBS_NAMES[i],
+            continuous_update=False,
+            readout_format='.3g',
+            style={'description_width': '100px'},
+            layout=widgets.Layout(width='340px'),
+        )
+
+    w_cuts = [_make_cut_slider(i) for i in range(len(_OBS_NAMES))]
+
+    w_reset_cuts = widgets.Button(
+        description='Reset cuts',
+        layout=widgets.Layout(width='110px', height='28px', margin='4px 0px'))
+
+    _all_widgets += w_cuts + [w_reset_cuts]
+
     # ── Figure ────────────────────────────────────────────────────────────────
     fig = plt.figure(figsize=(12, 8))
     fig.canvas.header_visible = False
@@ -298,6 +340,18 @@ def show(n_samples=10_000):
             _state['ax_joint']      = fig.add_subplot(gs[1, :])
             _state['joint_mode']    = 'single'
 
+    # ── Cut mask ──────────────────────────────────────────────────────────────
+    def _cut_mask(arr):
+        mask = np.ones(len(arr), dtype=bool)
+        for i in range(len(w_cuts)):
+            lo, hi         = w_cuts[i].value
+            lo_def, hi_def = _FIXED_RANGES[i]
+            if lo > lo_def:
+                mask &= arr[:, i] >= lo
+            if hi < hi_def:
+                mask &= arr[:, i] <= hi
+        return mask
+
     # ── Drawing ───────────────────────────────────────────────────────────────
     def _draw(X, xi, yi, use_fixed):
         true_data = _state['true_data']
@@ -305,6 +359,15 @@ def show(n_samples=10_000):
 
         ax_xmarg.cla()
         ax_ymarg.cla()
+
+        # enforce hemiMass1 >= hemiMass2 on the estimated side
+        if xi in (5, 6, 12) or yi in (5, 6, 12):
+            X = X[X[:, 5] >= X[:, 6]]
+
+        # apply user-defined per-observable cuts (estimated side)
+        n_model_total = len(X)
+        X = X[_cut_mask(X)]
+        n_model_pass = len(X)
 
         xdata, ydata = X[:, xi], X[:, yi]
         mask = np.isfinite(xdata) & np.isfinite(ydata)
@@ -324,15 +387,20 @@ def show(n_samples=10_000):
 
         # prepare true-data slices up front (needed in both marginals and joint)
         tx = ty = None
+        n_true_total = n_true_pass = 0
         if true_data is not None:
-            tx_raw = true_data[:, xi]
-            ty_raw = true_data[:, yi]
+            n_true_total = len(true_data)
+            true_cut = true_data[_cut_mask(true_data)]
+            n_true_pass = len(true_cut)
+            tx_raw = true_cut[:, xi]
+            ty_raw = true_cut[:, yi]
             tmask  = np.isfinite(tx_raw) & np.isfinite(ty_raw)
             if tmask.sum() >= 20:
                 tx, ty = tx_raw[tmask], ty_raw[tmask]
 
         # marginals
-        ax_xmarg.hist(xdata, bins=80, range=xrng, color='steelblue', alpha=0.85,
+        b2 = 30
+        ax_xmarg.hist(xdata, bins=b2, range=xrng, color='steelblue', alpha=0.85,
                       density=True, histtype='step', linewidth=1.5,
                       label='model' if tx is not None else None)
         ax_xmarg.set_xlabel(xlbl, fontsize=10)
@@ -340,7 +408,7 @@ def show(n_samples=10_000):
         if use_fixed:
             ax_xmarg.set_xlim(xrng)
 
-        ax_ymarg.hist(ydata, bins=80, range=yrng, color='darkorange', alpha=0.85,
+        ax_ymarg.hist(ydata, bins=b2, range=yrng, color='darkorange', alpha=0.85,
                       density=True, histtype='step', linewidth=1.5,
                       label='model' if ty is not None else None)
         ax_ymarg.set_xlabel(ylbl, fontsize=10)
@@ -349,9 +417,9 @@ def show(n_samples=10_000):
             ax_ymarg.set_xlim(yrng)
 
         if tx is not None:
-            ax_xmarg.hist(tx, bins=80, range=xrng, color='crimson', alpha=0.85,
+            ax_xmarg.hist(tx, bins=b2, range=xrng, color='crimson', alpha=0.85,
                           density=True, histtype='step', linewidth=1.5, label='true')
-            ax_ymarg.hist(ty, bins=80, range=yrng, color='crimson', alpha=0.85,
+            ax_ymarg.hist(ty, bins=b2, range=yrng, color='crimson', alpha=0.85,
                           density=True, histtype='step', linewidth=1.5, label='true')
             ax_xmarg.legend(fontsize=8, framealpha=0.5)
             ax_ymarg.legend(fontsize=8, framealpha=0.5)
@@ -388,6 +456,17 @@ def show(n_samples=10_000):
             ax_true.set_ylabel(ylbl, fontsize=10)
             ax_true.set_title('True (simulated)', fontsize=10)
 
+        any_cut = any(
+            w_cuts[i].value[0] > _FIXED_RANGES[i][0] or w_cuts[i].value[1] < _FIXED_RANGES[i][1]
+            for i in range(len(w_cuts)))
+        if any_cut:
+            cut_html = (f'<br><span style="color:#555; font-size:0.85em">'
+                        f'Cuts: model {n_model_pass:,}/{n_model_total:,}')
+            if true_data is not None:
+                cut_html += f',&nbsp; true {n_true_pass:,}/{n_true_total:,}'
+            cut_html += '</span>'
+            w_info.value += cut_html
+
         fig.canvas.draw_idle()
 
     # ── Update callbacks ──────────────────────────────────────────────────────
@@ -403,7 +482,7 @@ def show(n_samples=10_000):
         n = w_nsamples.value
         try:
             corr, tf = helpers.interpolate_gennorm_params(mZ, mRho, rinv, alphaD)
-            X = helpers.sample_svj(corr, tf, n_samples=n, rng=_rng)
+            X = _add_derived(helpers.sample_svj(corr, tf, n_samples=n, rng=_rng))
         except ValueError as e:
             w_info.value = f'<span style="color:red">Error: {e}</span>'
             return
@@ -505,8 +584,22 @@ def show(n_samples=10_000):
         w.observe(update, names='value')
     w_validate.on_click(_on_validate)
 
+    for i in range(len(w_cuts)):
+        w_cuts[i].observe(update, names='value')
+
+    def _on_reset_cuts(_b):
+        for i in range(len(w_cuts)):
+            w_cuts[i].unobserve(update, names='value')
+        for i in range(len(w_cuts)):
+            w_cuts[i].value = list(_FIXED_RANGES[i])
+        for i in range(len(w_cuts)):
+            w_cuts[i].observe(update, names='value')
+        update()
+
+    w_reset_cuts.on_click(_on_reset_cuts)
+
     # ── Layout ────────────────────────────────────────────────────────────────
-    controls = widgets.VBox([
+    left_panel = widgets.VBox([
         w_mZ, w_mRho, w_rinv, w_alphaD,
         widgets.HBox([w_xfeat, w_yfeat, w_axes, w_validate],
                      layout=widgets.Layout(margin='8px 0px')),
@@ -515,5 +608,19 @@ def show(n_samples=10_000):
         w_info,
     ])
 
-    display(controls)
+    cut_panel = widgets.VBox(
+        [widgets.HTML('<b style="font-size:0.9em">Cuts &nbsp;<span style="color:#888; font-weight:normal">(drag handles; reset = full range)</span></b>')] +
+        w_cuts +
+        [w_reset_cuts],
+        layout=widgets.Layout(
+            overflow_y='scroll',
+            max_height='340px',
+            border='1px solid #ccc',
+            padding='4px 8px',
+        )
+    )
+
+    display(widgets.HBox(
+        [left_panel, cut_panel],
+        layout=widgets.Layout(align_items='flex-start', gap='20px')))
     update()
