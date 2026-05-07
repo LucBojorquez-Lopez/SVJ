@@ -259,17 +259,17 @@ _gn_mRho_vals   = _gn['mRho_vals']
 _gn_rinv_vals   = _gn['rinv_vals']
 _gn_alphaD_vals = _gn['alphaD_vals']
 
-_GN_N_OBS  = 11
-_GN_N_CORR = 55   # C(11,2)
+_GN_N_OBS  = 12
+_GN_N_CORR = 66   # C(12,2)
 
-# Concatenate corr_params (55) and flattened transform_params (11×4=44) → (grid..., 99)
-_gn_corr_arr = np.array(_gn['corr_params'])        # (8,8,8,8,55)
-_gn_tf_arr   = np.array(_gn['transform_params'])    # (8,8,8,8,11,4)
+# Concatenate corr_params (66) and flattened transform_params (12×4=48) → (grid..., 114)
+_gn_corr_arr = np.array(_gn['corr_params'])        # (8,8,8,8,66)
+_gn_tf_arr   = np.array(_gn['transform_params'])    # (8,8,8,8,12,4)
 _gn_all      = np.concatenate(
     [_gn_corr_arr,
      _gn_tf_arr.reshape(_gn_tf_arr.shape[:4] + (_GN_N_OBS * 4,))],
     axis=-1,
-)  # (8,8,8,8,99)
+)  # (8,8,8,8,114)
 
 _gn_interp = RegularGridInterpolator(
     (_gn_mZ_vals, _gn_mRho_vals, _gn_rinv_vals, _gn_alphaD_vals),
@@ -281,7 +281,7 @@ _gn_interp = RegularGridInterpolator(
 
 def interpolate_gennorm_params(mZ, mRho, rinv, alphaD):
     """
-    Return (corr_params_55, transform_params_11x4) interpolated at (mZ, mRho, rinv, alphaD)
+    Return (corr_params_66, transform_params_12x4) interpolated at (mZ, mRho, rinv, alphaD)
     via linear interpolation on the precomputed gennorm scan grid.
 
     Parameters
@@ -291,20 +291,20 @@ def interpolate_gennorm_params(mZ, mRho, rinv, alphaD):
 
     Returns
     -------
-    corr_params : np.ndarray, shape (55,)
-        Upper-triangle entries of the 11×11 MVN correlation matrix.
-    transform_params : np.ndarray, shape (11, 4)
+    corr_params : np.ndarray, shape (66,)
+        Upper-triangle entries of the 12×12 MVN correlation matrix.
+    transform_params : np.ndarray, shape (12, 4)
         [lam, beta, loc, scale] per observable (Box-Cox lambda first).
     """
-    params_99 = _gn_interp([[mZ, mRho, rinv, alphaD]])[0]
-    corr_55 = params_99[:_GN_N_CORR]
-    tf_11x4 = params_99[_GN_N_CORR:].reshape(_GN_N_OBS, 4)
-    return corr_55, tf_11x4
+    params_114 = _gn_interp([[mZ, mRho, rinv, alphaD]])[0]
+    corr_66 = params_114[:_GN_N_CORR]
+    tf_12x4 = params_114[_GN_N_CORR:].reshape(_GN_N_OBS, 4)
+    return corr_66, tf_12x4
 
 
-def sample_svj(corr_params_55, transform_params_11x4, n_samples=100_000, rng=None):
+def sample_svj(corr_params_66, transform_params_12x4, n_samples=100_000, rng=None):
     """
-    Draw n_samples from the joint distribution of the 11 SVJ observables.
+    Draw n_samples from the joint distribution of the 12 SVJ observables.
 
     Inverse pipeline per observable i:
       standard-normal z  →  normal CDF  →  gennorm quantile (beta, loc, scale)
@@ -312,9 +312,9 @@ def sample_svj(corr_params_55, transform_params_11x4, n_samples=100_000, rng=Non
 
     Parameters
     ----------
-    corr_params_55 : array-like, shape (55,)
-        Upper-triangle entries of the 11×11 correlation matrix (variances fixed to 1).
-    transform_params_11x4 : array-like, shape (11, 4)
+    corr_params_66 : array-like, shape (66,)
+        Upper-triangle entries of the 12×12 correlation matrix (variances fixed to 1).
+    transform_params_12x4 : array-like, shape (12, 4)
         [lam, beta, loc, scale] per observable.
     n_samples : int
         Number of samples to draw (default 10 000).
@@ -323,11 +323,11 @@ def sample_svj(corr_params_55, transform_params_11x4, n_samples=100_000, rng=Non
 
     Returns
     -------
-    X : np.ndarray, shape (n_samples, 11)
+    X : np.ndarray, shape (n_samples, 12)
         Samples in the original (untransformed) observable space.
     """
-    corr_55 = np.asarray(corr_params_55)
-    tf      = np.asarray(transform_params_11x4)   # (11, 4)
+    corr_55 = np.asarray(corr_params_66)
+    tf      = np.asarray(transform_params_12x4)   # (12, 4)
 
     # Reconstruct symmetric correlation matrix from upper triangle
     R = np.zeros((_GN_N_OBS, _GN_N_OBS))

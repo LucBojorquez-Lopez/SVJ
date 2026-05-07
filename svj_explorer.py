@@ -69,7 +69,7 @@ def _fixed_params_html(mRho, rinv):
             + ',  '.join(parts) + '</span>')
 
 
-def _make_validate_cfg(mZ, mRho, rinv, alphaD):
+def _make_validate_cfg(mZ, mRho, rinv, alphaD, n_events=100_000):
     """Generate cfg text for a validation run with the given slider parameters."""
     mq         = _CFG.get('mq',       4.0)
     Brl        = _CFG.get('Brl',      0.3)
@@ -86,7 +86,7 @@ def _make_validate_cfg(mZ, mRho, rinv, alphaD):
         f'rinv2      = {rinv}\n'
         f'Brl        = {Brl}\n'
         f'alphaD     = {alphaD}\n'
-        f'nEvent     = 10000\n'
+        f'nEvent     = {n_events}\n'
         f'jetR       = {jetR}\n'
         f'LambdaDQCD = {LambdaDQCD}\n'
         f'nWorkers   = {nWorkers}\n'
@@ -100,10 +100,9 @@ def _make_validate_cfg(mZ, mRho, rinv, alphaD):
 def _load_true_data():
     """Load and preprocess the most recently simulated jets_default.tsv."""
     dataL = np.loadtxt('data/regression/jets_default.tsv')
-    mask_cols = np.array([0, 1, 2, 4, 5, 7, 11, 12, 13, 14, 15])
+    mask_cols = np.array([0, 1, 2, 4, 5, 7, 8, 11, 12, 13, 14, 15])
     data_to_fit = dataL[:, mask_cols].copy()
     data_to_fit[:, 4] = 1 - data_to_fit[:, 4]          # thrust → 1 - thrust
-    data_to_fit[:, 5] = dataL[:, 8] / dataL[:, 7]      # hemi-mass ratio
     return helpers.preprocess_data(data_to_fit)
 
 
@@ -111,7 +110,7 @@ def _load_true_data():
 
 _OBS_NAMES = [
     'leadVisPt', 'leadWidth', 'MET', 'maxMuPt', 'inv_jetThrust',
-    'hemiMassRatio', 'e2c', 'e3c', 'tau1', 'tau2', 'tau3',
+    'hemiMass1', 'hemiMass2', 'e2c', 'e3c', 'tau1', 'tau2', 'tau3',
 ]
 
 _OBS_LABELS = [
@@ -120,7 +119,8 @@ _OBS_LABELS = [
     r'MET (GeV)',
     r'Max $\mu$ $p_T$ (GeV)',
     r'$1 - $ jet thrust',
-    r'Hemi-mass ratio',
+    r'Hemi-mass 1 (GeV)',
+    r'Hemi-mass 2 (GeV)',
     r'$e_2^c$',
     r'$e_3^c$',
     r'$\tau_1$',
@@ -152,11 +152,11 @@ def _compute_fixed_ranges(n_corner_samples=3_000):
                         pass
 
     if not chunks:
-        return [(0.0, 1.0)] * 11
+        return [(0.0, 1.0)] * 12
 
     all_s = np.vstack(chunks)
     ranges = []
-    for i in range(11):
+    for i in range(12):
         col = all_s[:, i]
         col = col[np.isfinite(col)]
         if len(col) < 10:
@@ -176,7 +176,7 @@ def show(n_samples=10_000):
     """
     Launch the two-feature SVJ parameter explorer.
 
-    Select any two of the 11 observables to view their marginals and joint
+    Select any two of the 12 observables to view their marginals and joint
     distribution while varying the four SVJ physics parameters via sliders.
     Press VALIDATE to run a full PYTHIA simulation at the current point and
     overlay the true distributions.
@@ -193,7 +193,7 @@ def show(n_samples=10_000):
 
     # ── Mutable closure state ─────────────────────────────────────────────────
     _state = {
-        'true_data':     None,   # N×11 array after validation, else None
+        'true_data':     None,   # N×12 array after validation, else None
         'model_samples': None,   # last sampled model array
         'joint_mode':    'single',
         'ax_joint':      None,   # full-width axis (single mode)
@@ -247,6 +247,18 @@ def show(n_samples=10_000):
         description='Axes:',
         style={'description_width': '50px', 'button_width': '80px'})
 
+    # ── Sample-count inputs ───────────────────────────────────────────────────
+    int_style  = {'description_width': '90px'}
+    int_layout = widgets.Layout(width='220px')
+
+    w_nsamples = widgets.BoundedIntText(
+        value=n_samples, min=100, max=500_000, step=1000,
+        description='N model:', style=int_style, layout=int_layout)
+
+    w_nvalidate = widgets.BoundedIntText(
+        value=100_000, min=1_000, max=2_000_000, step=10_000,
+        description='N validate:', style=int_style, layout=int_layout)
+
     # ── Validate button ───────────────────────────────────────────────────────
     w_validate = widgets.Button(
         description='VALIDATE',
@@ -256,7 +268,9 @@ def show(n_samples=10_000):
     w_info = widgets.HTML(value='')
 
     # ── All interactive widgets (for bulk enable/disable) ─────────────────────
-    _all_widgets = [w_mZ, w_mRho, w_rinv, w_alphaD, w_xfeat, w_yfeat, w_axes, w_validate]
+    _all_widgets = [w_mZ, w_mRho, w_rinv, w_alphaD,
+                    w_xfeat, w_yfeat, w_axes,
+                    w_nsamples, w_nvalidate, w_validate]
 
     # ── Figure ────────────────────────────────────────────────────────────────
     fig = plt.figure(figsize=(12, 8))
@@ -355,20 +369,20 @@ def show(n_samples=10_000):
             ax_true = _state['ax_joint_true']
             ax_est.cla()
             ax_true.cla()
-
+            b = 50
             # shared colour scale: compute both densities first, then find vmax
-            H_est, _, _ = np.histogram2d(xdata, ydata, bins=80,
+            H_est, _, _ = np.histogram2d(xdata, ydata, bins=b,
                                          range=[xrng, yrng], density=True)
-            H_true, _, _ = np.histogram2d(tx, ty, bins=80,
+            H_true, _, _ = np.histogram2d(tx, ty, bins=b,
                                           range=[xrng, yrng], density=True)
             vmax = max(H_est.max(), H_true.max())
 
-            ax_est.hist2d(xdata, ydata, bins=80, range=[xrng, yrng],
+            ax_est.hist2d(xdata, ydata, bins=b, range=[xrng, yrng],
                           cmap='viridis', density=True, vmin=0, vmax=vmax)
             ax_est.set_xlabel(xlbl, fontsize=10)
             ax_est.set_ylabel(ylbl, fontsize=10)
             ax_est.set_title('Estimated', fontsize=10)
-            ax_true.hist2d(tx, ty, bins=80, range=[xrng, yrng],
+            ax_true.hist2d(tx, ty, bins=b, range=[xrng, yrng],
                            cmap='viridis', density=True, vmin=0, vmax=vmax)
             ax_true.set_xlabel(xlbl, fontsize=10)
             ax_true.set_ylabel(ylbl, fontsize=10)
@@ -386,9 +400,10 @@ def show(n_samples=10_000):
         yi     = w_yfeat.value
         use_fixed = (w_axes.value == 'Fixed')
 
+        n = w_nsamples.value
         try:
             corr, tf = helpers.interpolate_gennorm_params(mZ, mRho, rinv, alphaD)
-            X = helpers.sample_svj(corr, tf, n_samples=n_samples, rng=_rng)
+            X = helpers.sample_svj(corr, tf, n_samples=n, rng=_rng)
         except ValueError as e:
             w_info.value = f'<span style="color:red">Error: {e}</span>'
             return
@@ -402,7 +417,7 @@ def show(n_samples=10_000):
 
         w_info.value = (
             f'<span style="font-weight:bold; color:steelblue">'
-            f'{n_samples:,} samples — '
+            f'{n:,} samples — '
             f'mZ\'={mZ:.0f} GeV, mRho={mRho:.1f} GeV, '
             f'rinv={rinv:.2f}, alphaD={alphaD:.2f}'
             f'</span>'
@@ -427,9 +442,10 @@ def show(n_samples=10_000):
         for w in _all_widgets:
             w.disabled = True
 
+        n_val = w_nvalidate.value
         w_info.value = (
             '<span style="color:#c07000; font-weight:bold">'
-            f'⏳ Running PYTHIA simulation — '
+            f'⏳ Running PYTHIA simulation ({n_val:,} events) — '
             f'mZ\'={mZ:.0f}, mRho={mRho:.1f}, rinv={rinv:.2f}, alphaD={alphaD:.2f} …'
             '</span>'
         )
@@ -437,7 +453,7 @@ def show(n_samples=10_000):
         def _thread():
             tmp_path = None
             try:
-                cfg_text = _make_validate_cfg(mZ, mRho, rinv, alphaD)
+                cfg_text = _make_validate_cfg(mZ, mRho, rinv, alphaD, n_val)
                 with tempfile.NamedTemporaryFile(
                         mode='w', suffix='.cfg', dir='.', delete=False) as f:
                     f.write(cfg_text)
@@ -485,7 +501,7 @@ def show(n_samples=10_000):
     # ── Wire up observers ─────────────────────────────────────────────────────
     for w in [w_mZ, w_mRho, w_rinv, w_alphaD]:
         w.observe(update_clear, names='value')
-    for w in [w_xfeat, w_yfeat, w_axes]:
+    for w in [w_xfeat, w_yfeat, w_axes, w_nsamples]:
         w.observe(update, names='value')
     w_validate.on_click(_on_validate)
 
@@ -494,6 +510,8 @@ def show(n_samples=10_000):
         w_mZ, w_mRho, w_rinv, w_alphaD,
         widgets.HBox([w_xfeat, w_yfeat, w_axes, w_validate],
                      layout=widgets.Layout(margin='8px 0px')),
+        widgets.HBox([w_nsamples, w_nvalidate],
+                     layout=widgets.Layout(margin='0px 0px 8px 0px')),
         w_info,
     ])
 

@@ -3,17 +3,17 @@
 scan_regression_gennorm.py
 ==========================
 Scan (mZ', mRho, rinv, alphaD) parameter space, fitting a Multivariate Normal
-on 11 transformed observables at each grid point.
+on 12 transformed observables at each grid point.
 
 At each grid point the pipeline is:
   1. Run ./svj_regression (save_tsv=1, full_obs=1); raw TSV is written to a
      worker-unique /tmp path and deleted immediately after reading.
   2. Apply observable selection + row filter (see below).
-  3. Fit Box-Cox + GenNorm per marginal → transform_params (11×4).
-  4. Map data to standard-normal marginals → tr_data (M×11).
+  3. Fit Box-Cox + GenNorm per marginal → transform_params (12×4).
+  4. Map data to standard-normal marginals → tr_data (M×12).
   5. Estimate MVN correlation matrix with mean=0, var=1 fixed:
        R = tr_data.T @ tr_data / M
-     Extract upper-triangle → corr_params (55,).
+     Extract upper-triangle → corr_params (66,).
 
 Observable selection (mask cols of raw 16-col TSV):
   idx  raw col   name
@@ -22,12 +22,13 @@ Observable selection (mask cols of raw 16-col TSV):
    2     2       MET
    3     4       maxMuPt
    4     5       1 - jetThrust         (flipped)
-   5     7       hemiMass2/hemiMass1   (ratio; rows with ratio>=1 dropped)
-   6    11       e2c
-   7    12       e3c
-   8    13       tau1
-   9    14       tau2
-  10    15       tau3
+   5     7       hemiMass1
+   6     8       hemiMass2
+   7    11       e2c
+   8    12       e3c
+   9    13       tau1
+  10    14       tau2
+  11    15       tau3
 
 Parallelisation:
   n_outer_workers grid points run simultaneously (Python ProcessPoolExecutor).
@@ -42,9 +43,9 @@ Checkpointing:
   Results are saved to the output file every checkpoint_every completions.
 
 Output: simulated/gennorm/gennorm_scan.npz
-  corr_params      (N_mZ, N_mRho, N_rinv, N_alphaD, 55)
-  transform_params (N_mZ, N_mRho, N_rinv, N_alphaD, 11, 4)  [lam, β, loc, scale]
-  obs_names        (11,)
+  corr_params      (N_mZ, N_mRho, N_rinv, N_alphaD, 66)
+  transform_params (N_mZ, N_mRho, N_rinv, N_alphaD, 12, 4)  [lam, β, loc, scale]
+  obs_names        (12,)
   scan_params      (N_mZ, N_mRho, N_rinv, N_alphaD, 6)  [mZ,mRho,mPi,Λ,rinv,αD]
   mZ_vals, mRho_vals, rinv_vals, alphaD_vals
 """
@@ -65,14 +66,14 @@ BINARY = './svj_regression'
 MRHO_MPION_RATIO  = 8.0 / 15.5
 MRHO_LAMBDA_RATIO = 5.0 / 15.5
 
-OBS_MASK  = np.array([0, 1, 2, 4, 5, 7, 11, 12, 13, 14, 15])
-N_OBS     = len(OBS_MASK)                  # 11
+OBS_MASK  = np.array([0, 1, 2, 4, 5, 7, 8, 11, 12, 13, 14, 15])
+N_OBS     = len(OBS_MASK)                  # 12
 CORR_IDX  = np.triu_indices(N_OBS, k=1)   # upper-triangle index pair
-N_CORR    = len(CORR_IDX[0])              # 55 = C(11,2)
+N_CORR    = len(CORR_IDX[0])              # 66 = C(12,2)
 
 OBS_NAMES = np.array([
     'leadVisPt', 'leadWidth', 'MET',
-    'maxMuPt', 'inv_jetThrust', 'hemiMassRatio',
+    'maxMuPt', 'inv_jetThrust', 'hemiMass1', 'hemiMass2',
     'e2c', 'e3c', 'tau1', 'tau2', 'tau3',
 ], dtype=object)
 
@@ -114,13 +115,8 @@ def load_and_preprocess(tsv_path):
     if data.ndim != 2 or data.shape[1] != 16:
         return None
 
-    X = data[:, OBS_MASK].copy()       # (N, 11)
+    X = data[:, OBS_MASK].copy()       # (N, 12)
     X[:, 4] = 1.0 - X[:, 4]           # flip jetThrust
-
-    m = data[:, 8] / data[:, 7]        # hemiMass2 / hemiMass1
-    row_mask = m < 1.0
-    X = X[row_mask]
-    X[:, 5] = m[row_mask]
 
     valid = np.all((X > 0) & np.isfinite(X), axis=1)
     X = X[valid]
@@ -150,7 +146,7 @@ def transform_data(X):
 
 def estimate_corr(tr_data):
     """Upper-triangle of MVN correlation matrix (mean=0, var=1 fixed)."""
-    R = (tr_data.T @ tr_data) / len(tr_data)   # (11, 11)
+    R = (tr_data.T @ tr_data) / len(tr_data)   # (12, 12)
     return R[CORR_IDX]                           # (55,)
 
 
