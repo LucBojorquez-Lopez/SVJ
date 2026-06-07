@@ -5,13 +5,16 @@ import scipy.special as sp
 import scipy.stats as st
 from scipy.interpolate import RegularGridInterpolator
 from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
 try:
     from tqdm import tqdm
     _has_tqdm = True
 except ImportError:
     _has_tqdm = False
 
-regression = np.load('simulated/regression_scan.npz', allow_pickle = True)
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+regression = np.load(_REPO_ROOT / 'simulated/v1/regression_scan.npz', allow_pickle = True)
 
 # ── Build RegularGridInterpolator once at import time ─────────────────────────
 _mZ_vals     = regression['mZ_vals']
@@ -252,7 +255,7 @@ def transform_data(data):
 
 # ── Gennorm scan grid interpolator ────────────────────────────────────────────
 
-_gn = np.load('simulated/gennorm/gennorm_scan.npz', allow_pickle=True)
+_gn = np.load(_REPO_ROOT / 'simulated/gennorm/gennorm_scan.npz', allow_pickle=True)
 
 _gn_mZ_vals     = _gn['mZ_vals']
 _gn_mRho_vals   = _gn['mRho_vals']

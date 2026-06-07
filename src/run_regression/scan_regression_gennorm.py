@@ -61,7 +61,8 @@ from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import argparse
 
-BINARY = './svj_regression'
+_HERE  = Path(__file__).resolve().parent
+BINARY = str(_HERE.parent / 'generate_events' / 'svj_regression')
 
 MRHO_MPION_RATIO  = 8.0 / 15.5
 MRHO_LAMBDA_RATIO = 5.0 / 15.5
@@ -277,7 +278,7 @@ def _merge(out_dir, n_jobs):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('cfg', nargs='?', default='scan_regression.cfg')
+    parser.add_argument('cfg', nargs='?', default=str(_HERE / 'scan_regression.cfg'))
     parser.add_argument('--job-index', type=int, default=0,
                         help='Index of this job slice (0-based)')
     parser.add_argument('--n-jobs',    type=int, default=1,

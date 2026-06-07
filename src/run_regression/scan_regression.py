@@ -52,7 +52,8 @@ import tempfile
 import numpy as np
 from pathlib import Path
 
-BINARY   = './svj_regression'
+_HERE    = Path(__file__).resolve().parent
+BINARY   = str(_HERE.parent / 'generate_events' / 'svj_regression')
 TEMP_CFG = '/tmp/svj_scan_point.cfg'
 
 PARAM_NAMES = np.array([
@@ -140,7 +141,7 @@ def run_point(cfg_path):
 # ── Main scan ─────────────────────────────────────────────────────────────────
 
 def main():
-    scan_cfg_path = 'scan_regression.cfg'
+    scan_cfg_path = str(_HERE / 'scan_regression.cfg')
     if len(sys.argv) > 1:
         scan_cfg_path = sys.argv[1]
 

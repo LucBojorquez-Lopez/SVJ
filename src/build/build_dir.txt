@@ -21,11 +21,32 @@ make -j$(nproc)
 cd ..
 
 # ── 3. Clone the repo ─────────────────────────────────────────────────────────
-git clone <your-repo-url> mySVJ
+git clone https://github.com/LucBojorquez-Lopez/SVJ.git mySVJ
 cd mySVJ
 
-# ── 4. Build the binary ───────────────────────────────────────────────────────
-make svj_regression
+#Will need to add a Makefile like this:
 
-# ── 5. Python dependencies ────────────────────────────────────────────────────
+PYTHIA_DIR  = ../pythia8317
+FASTJET_DIR = ../fastjet3
+-include $(PYTHIA_DIR)/examples/Makefile.inc
+
+CXX_COMMON += -std=c++17 -pthread
+
+CXX_COMMON := $(OBJ_COMMON) -I$(PYTHIA_DIR)/include $(CXX_COMMON) $(GZIP_LIB)
+CXX_COMMON += -L$(PYTHIA_DIR)/lib -Wl,-rpath,$(PYTHIA_DIR)/lib -lpythia8 -ldl
+CXX_COMMON += $(shell $(FASTJET_DIR)/bin/fastjet-config --cxxflags --libs)
+
+src/generate_events/svj_regression: src/generate_events/svj_regression.cc
+	$(CXX) $< -o $@ $(CXX_COMMON)
+
+.PHONY: svj_regression
+svj_regression: src/generate_events/svj_regression
+
+
+
+# ── 4. Python dependencies ────────────────────────────────────────────────────
+#(create venv)
 pip install numpy scipy scikit-learn
+
+# ── 5. Build the binary ───────────────────────────────────────────────────────
+make -B svj_regression

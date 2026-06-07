@@ -60,7 +60,8 @@ static std::string cfgStr(const std::map<std::string,std::string>& cfg,
 // user_index tags
 static const int TAG_VIS  = 0;
 static const int TAG_MUON = 1;
-static const int TAG_INV  = 2;
+static const int TAG_INV  = 2;  // neutrinos (pid 12/14/16)
+static const int TAG_DARK = 3;  // dark pions/rhos (pid 51/53)
 
 // Per-event jet kinematics (visible 4-momentum for leading and subleading jet)
 struct JetKin {
@@ -86,6 +87,7 @@ static int    saveTSV   =    1;   // write raw TSV; set to 0 during scan
 static int    jetsVisOnly = 1;    // 1 = store visible jet 4-momenta in jets_kinematics.tsv; 0 = full jet (incl. invisible)
 static int    dijetOnly  =  0;   // 1 = only keep events with >= 2 jets (dijet topology)
 static int    fullObs    =  1;   // 1 = compute all observables; 0 = only leadVisPt/leadWidth/MET (fast scan mode)
+static double visJetPtMin = 20.0; // min visible pT (GeV) for a jet to be kept
 static std::string tsvFile    = "data/regression/jets_default.tsv";
 static std::string tsvKinFile = "data/regression/jets_kinematics.tsv";
 
@@ -273,8 +275,6 @@ static MVTResult fitMVT(const std::vector<std::array<double,3>>& data,
     // ── E-step: Mahalanobis distances and weights ──
     double Sinv[3][3];
     inv3(Sigma, Sinv);
-    double logdet = std::log(std::fabs(det3(Sigma)));
-
     double wsum = 0.0;
     for (int k = 0; k < n; k++) {
       delta[k] = mahal3(data[k].data(), mu, Sinv);
@@ -360,7 +360,7 @@ static MVTResult fitMVT(const std::vector<std::array<double,3>>& data,
 }
 
 // ── Worker: collect per-event observables ────────────────────────────────────
-// data[] layout (16 values per event):
+// data[] layout (22 values per event):
 //   0  leadVisPt     1  leadWidth     2  MET
 //   3  maxElePt      4  maxMuPt
 //   5  jetThrust     6  transSphericity
@@ -368,8 +368,10 @@ static MVTResult fitMVT(const std::vector<std::array<double,3>>& data,
 //   9  ptBal         10 dPhiMETdijet
 //   11 e2c           12 e3c
 //   13 tau1          14 tau2          15 tau3
+//   16 dPhiMETclose  17 dPhiMETfar    18 nJets
+//   19 closeJetIsLead  20 nInvClose   21 metPhi
 static void runWorker(int workerID, int nEvtWorker,
-                      std::vector<std::array<double,16>>& data,
+                      std::vector<std::array<double,22>>& data,
                       std::vector<JetKin>& jetData) {
   Pythia pythia;
   if (!setupPythia(pythia, workerID + 1)) return;
@@ -377,7 +379,7 @@ static void runWorker(int workerID, int nEvtWorker,
   Event& event = pythia.event;
   fastjet::JetDefinition jet_def(fastjet::antikt_algorithm, jetR);
 
-  const double VIS_PT_MIN = 20.0;
+  const double VIS_PT_MIN = visJetPtMin;
   const double ETA_MAX    =  2.5;
   const double PI         = std::acos(-1.0);
 
@@ -399,9 +401,9 @@ static void runWorker(int workerID, int nEvtWorker,
       int id  = p.id();
 
       int ptag;
-      if (aid == 12 || aid == 14 || aid == 16 ||
-          id  == 51 || id  == -51 ||
-          id  == 53 || id  == -53)
+      if (id == 51 || id == -51 || id == 53 || id == -53)
+        ptag = TAG_DARK;
+      else if (aid == 12 || aid == 14 || aid == 16)
         ptag = TAG_INV;
       else if (aid == 13)
         ptag = TAG_MUON;
@@ -419,7 +421,7 @@ static void runWorker(int workerID, int nEvtWorker,
           if (mpt > max_mu_pt) max_mu_pt = mpt;
         }
         // Event-level transverse sphericity tensor: all visible+muon particles
-        if (ptag != TAG_INV) {
+        if (ptag < TAG_INV) {
           double px = p.px(), py = p.py();
           s_xx += px*px; s_xy += px*py; s_yy += py*py;
           s_pt2 += px*px + py*py;
@@ -447,6 +449,8 @@ static void runWorker(int workerID, int nEvtWorker,
     std::vector<std::array<double,4>> lead_constits;          // visible constituents of leading jet (substructure)
     std::vector<std::array<double,4>> all_vis_constits;       // visible constituents of ALL passing jets (hemispheres)
     std::vector<std::pair<double,double>> jet_vis_vecs;       // (vis_px, vis_py) per passing jet
+    std::vector<int> jet_inv_counts;                          // dark particle count per passing jet
+    int lead_vis_idx = 0;
 
     for (const auto& jet : raw_jets) {
       if (std::fabs(jet.eta()) >= ETA_MAX) continue;
@@ -455,7 +459,7 @@ static void runWorker(int workerID, int nEvtWorker,
       double width_num = 0, width_den = 0;
 
       for (const auto& c : jet.constituents()) {
-        if (c.user_index() == TAG_INV) continue;   // muons (TAG_MUON) count as visible
+        if (c.user_index() >= TAG_INV) continue;   // muons (TAG_MUON) count as visible
 
         vis_px += c.px();
         vis_py += c.py();
@@ -473,12 +477,18 @@ static void runWorker(int workerID, int nEvtWorker,
       evt_vis_px += vis_px;
       evt_vis_py += vis_py;
       ++n_jets;
-      if (fullObs) jet_vis_vecs.emplace_back(vis_px, vis_py);
+      if (fullObs) {
+        jet_vis_vecs.emplace_back(vis_px, vis_py);
+        int n_dark = 0;
+        for (const auto& c : jet.constituents())
+          if (c.user_index() == TAG_DARK) ++n_dark;
+        jet_inv_counts.push_back(n_dark);
+      }
 
       if (fullObs) {
         // Accumulate all visible constituents for event-level hemisphere masses
         for (const auto& c2 : jet.constituents()) {
-          if (c2.user_index() == TAG_INV) continue;
+          if (c2.user_index() >= TAG_INV) continue;
           all_vis_constits.push_back({c2.px(), c2.py(), c2.pz(), c2.e()});
         }
       }
@@ -489,12 +499,13 @@ static void runWorker(int workerID, int nEvtWorker,
         sub_vis_pt  = lead_vis_pt;
         j1_vis_px   = vis_px;  j1_vis_py = vis_py;
         lead_vis_pt = vis_pt;
+        if (fullObs) lead_vis_idx = (int)jet_vis_vecs.size() - 1;
         lead_width  = (width_den > 0) ? width_num / width_den : 0.0;
         if (fullObs) {
           // Save visible constituents of leading jet for substructure (E2C, E3C, tauN)
           lead_constits.clear();
           for (const auto& c2 : jet.constituents()) {
-            if (c2.user_index() == TAG_INV) continue;
+            if (c2.user_index() >= TAG_INV) continue;
             lead_constits.push_back({c2.px(), c2.py(), c2.pz(), c2.e()});
           }
         }
@@ -524,7 +535,8 @@ static void runWorker(int workerID, int nEvtWorker,
     if (n_jets < 1) continue;
     if (dijetOnly && n_jets < 2) continue;
 
-    double met = std::sqrt(evt_vis_px*evt_vis_px + evt_vis_py*evt_vis_py);
+    double met     = std::sqrt(evt_vis_px*evt_vis_px + evt_vis_py*evt_vis_py);
+    double met_phi = std::atan2(-evt_vis_py, -evt_vis_px);
 
     // ── Transverse sphericity S_T = 2*lambda_min of the 2x2 sphericity tensor ──
     // Tensor S^{ab} = sum(p_a*p_b) / sum(pT^2), trace = 1, so S_T = 2*lambda_min.
@@ -599,7 +611,6 @@ static void runWorker(int workerID, int nEvtWorker,
     // close/far = jet with smallest/largest delta-phi to MET, over all passing jets.
     double pt_bal = 0.0;
     if (fullObs && n_jets >= 2) {
-      double met_phi = std::atan2(-evt_vis_py, -evt_vis_px);
       double min_dphi = 4.0, max_dphi = -1.0;
       int close_idx = 0, far_idx = 0;
       for (int jj = 0; jj < (int)jet_vis_vecs.size(); ++jj) {
@@ -623,10 +634,35 @@ static void runWorker(int workerID, int nEvtWorker,
     double dphi_met_dijet = 0.0;
     if (fullObs && n_jets >= 2) {
       double dijet_phi = std::atan2(j1_vis_py + j2_vis_py, j1_vis_px + j2_vis_px);
-      double met_phi   = std::atan2(-evt_vis_py, -evt_vis_px);
       double dphi = std::fabs(dijet_phi - met_phi);
       if (dphi > PI) dphi = 2*PI - dphi;
       dphi_met_dijet = dphi;
+    }
+
+    // ── delta-phi(closest/furthest jet to MET, MET) ──
+    // Signed: dphi = jet_phi - met_phi, wrapped to (-pi, pi].
+    // Close/far determined by |dphi|; stored values are signed.
+    double dphi_met_close = 0.0, dphi_met_far = 0.0;
+    int close_idx = 0;
+    if (fullObs && n_jets >= 1) {
+      double min_abs = 4.0, max_abs = -1.0;
+      for (int jj = 0; jj < (int)jet_vis_vecs.size(); ++jj) {
+        double jphi = std::atan2(jet_vis_vecs[jj].second, jet_vis_vecs[jj].first);
+        double dphi = jphi - met_phi;
+        if (dphi >  PI) dphi -= 2*PI;
+        if (dphi < -PI) dphi += 2*PI;
+        double adphi = std::fabs(dphi);
+        if (adphi < min_abs) { min_abs = adphi; dphi_met_close = dphi; close_idx = jj; }
+        if (adphi > max_abs) { max_abs = adphi; dphi_met_far   = dphi; }
+      }
+    }
+
+    // ── is closest jet the leading-pT jet? / dark particle count in closest jet ──
+    double close_jet_is_lead = 0.0;
+    double n_inv_close       = 0.0;
+    if (fullObs && n_jets >= 1) {
+      close_jet_is_lead = (close_idx == lead_vis_idx) ? 1.0 : 0.0;
+      n_inv_close       = (double)jet_inv_counts[close_idx];
     }
 
     // ── Energy Correlators and N-subjettiness (leading visible-pT jet) ──
@@ -802,7 +838,9 @@ static void runWorker(int workerID, int nEvtWorker,
                     max_ele_pt, max_mu_pt, thrust,
                     spher, hemi_mass1, hemi_mass2,
                     pt_bal, dphi_met_dijet,
-                    e2c, e3c, tau1, tau2, tau3});
+                    e2c, e3c, tau1, tau2, tau3,
+                    dphi_met_close, dphi_met_far, (double)n_jets,
+                    close_jet_is_lead, n_inv_close, met_phi});
     jetData.push_back({n_jets,
                        j1_px, j1_py, j1_pz, j1_E,
                        j2_px, j2_py, j2_pz, j2_E});
@@ -811,7 +849,7 @@ static void runWorker(int workerID, int nEvtWorker,
 
 int main(int argc, char* argv[]) {
 
-  std::string cfgPath = "svj_regression.cfg";
+  auto cfgPath = (std::filesystem::path(argv[0]).parent_path() / "svj_regression.cfg").string();
   if (argc > 1) cfgPath = argv[1];
 
   auto cfg = readConfig(cfgPath);
@@ -834,6 +872,7 @@ int main(int argc, char* argv[]) {
   jetsVisOnly = cfgInt  (cfg, "jets_vis_only", jetsVisOnly);
   dijetOnly   = cfgInt  (cfg, "dijet_only",    dijetOnly);
   fullObs     = cfgInt  (cfg, "full_obs",      fullObs);
+  visJetPtMin = cfgDouble(cfg, "vis_jet_pt_min", visJetPtMin);
   tsvFile     = cfgStr  (cfg, "tsv_file",      tsvFile);
   tsvKinFile  = cfgStr  (cfg, "tsv_kin_file",  tsvKinFile);
 
@@ -846,7 +885,7 @@ int main(int argc, char* argv[]) {
   int base      = nEvent / nWorkers;
   int remainder = nEvent % nWorkers;
 
-  std::vector<std::vector<std::array<double,16>>> results(nWorkers);
+  std::vector<std::vector<std::array<double,22>>> results(nWorkers);
   std::vector<std::vector<JetKin>> jetResults(nWorkers);
   std::vector<std::thread> threads;
   threads.reserve(nWorkers);
@@ -872,7 +911,9 @@ int main(int argc, char* argv[]) {
             "\themiMass1\themiMass2"
             "\tptBal\tdPhiMETdijet"
             "\te2c\te3c"
-            "\ttau1\ttau2\ttau3\n";
+            "\ttau1\ttau2\ttau3"
+            "\tdPhiMETclose\tdPhiMETfar\tnJets"
+            "\tcloseJetIsLead\tnInvClose\tmetPhi\n";
     fOut << std::scientific << std::setprecision(6);
     for (const auto& rows : results)
       for (const auto& r : rows)
@@ -881,7 +922,9 @@ int main(int argc, char* argv[]) {
              << r[6]  << "\t" << r[7]  << "\t" << r[8]  << "\t"
              << r[9]  << "\t" << r[10] << "\t"
              << r[11] << "\t" << r[12] << "\t"
-             << r[13] << "\t" << r[14] << "\t" << r[15] << "\n";
+             << r[13] << "\t" << r[14] << "\t" << r[15] << "\t"
+             << r[16] << "\t" << r[17] << "\t" << r[18] << "\t"
+             << r[19] << "\t" << r[20] << "\t" << r[21] << "\n";
 
     std::ofstream fJets(tsvKinFile);
     fJets << std::scientific << std::setprecision(6);

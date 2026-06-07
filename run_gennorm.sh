@@ -24,7 +24,7 @@ echo "    cpus:  $SLURM_CPUS_ON_NODE"
 echo "    python: $(python --version)"
 echo ""
 
-python scan_regression_gennorm.py --job-index $SLURM_ARRAY_TASK_ID --n-jobs 4
+python src/run_regression/scan_regression_gennorm.py --job-index $SLURM_ARRAY_TASK_ID --n-jobs 4
 
 echo ""
 echo "=== job $SLURM_JOB_ID finished $(date) ==="

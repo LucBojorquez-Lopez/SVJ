@@ -21,15 +21,22 @@ import tempfile
 import threading
 import os
 import sys
+from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(_HERE.parent))
 import helpers
+
+_BINARY      = str(_HERE.parent / 'generate_events' / 'svj_regression')
+_DEFAULT_CFG = str(_HERE.parent / 'generate_events' / 'svj_regression.cfg')
 
 
 # ── Config helpers ────────────────────────────────────────────────────────────
 
-def _parse_cfg(path='svj_regression.cfg'):
+def _parse_cfg(path=None):
     """Return dict of numeric values from the cfg file (comments stripped, expressions evaled)."""
+    if path is None:
+        path = _DEFAULT_CFG
     result = {}
     try:
         with open(path) as f:
@@ -539,7 +546,7 @@ def show(n_samples=10_000):
                     tmp_path = f.name
 
                 result = subprocess.run(
-                    ['./svj_regression', tmp_path],
+                    [_BINARY, tmp_path],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
                     text=True,
