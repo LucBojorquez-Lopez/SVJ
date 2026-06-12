@@ -164,10 +164,18 @@ static bool setupPythia(Pythia& pythia, int seed) {
     pythia.readString("-4900211:addChannel = 1 " + vis.str() + " 91 4 -4");
   }
   {
+    // Brl is the fraction of the VISIBLE dark-rho decays going to mu+mu-.
+    // lep_br  = Brl * (1 - rinv2)  → mu+mu-
+    // bott_br = (1 - Brl) * (1 - rinv2)  → bb-bar
+    // These always sum to (1 - rinv2), together with rinv2 giving total = 1.
+    // NOTE: existing gennorm_scan.npz was generated with old absolute Brl
+    //       (Brl=0.3 absolute muon BR, rinv2=rinv).
+    double lep_br  = Brl * (1.0 - rinv2);
+    double bott_br = (1.0 - Brl) * (1.0 - rinv2);
     std::ostringstream lep, bott, inv2;
     inv2 << rinv2;
-    bott << 1. - Brl - rinv2;
-    lep  << Brl;
+    bott << bott_br;
+    lep  << lep_br;
 
     pythia.readString("4900113:onMode = off");
     pythia.readString("4900213:onMode = off");
@@ -876,9 +884,9 @@ int main(int argc, char* argv[]) {
   tsvFile     = cfgStr  (cfg, "tsv_file",      tsvFile);
   tsvKinFile  = cfgStr  (cfg, "tsv_kin_file",  tsvKinFile);
 
-  if (Brl + rinv2 > 1.0) {
-    std::cerr << "Error: Brl + rinv2 = " << Brl + rinv2
-              << " > 1 (dark rho BRs unphysical)\n";
+  if (rinv2 < 0.0 || rinv2 >= 1.0 || Brl < 0.0 || Brl > 1.0) {
+    std::cerr << "Error: rinv2=" << rinv2 << " Brl=" << Brl
+              << " — require 0 <= rinv2 < 1 and 0 <= Brl <= 1\n";
     return 1;
   }
 

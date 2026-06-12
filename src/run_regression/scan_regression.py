@@ -245,7 +245,7 @@ def main():
             'mPi':        mPi,
             'mRho':       mRho,
             'rinv':       rinv,
-            'rinv2':      rinv,
+            'rinv2':      rinv,   # v1 scan choice: tie rinv2=rinv (dark rho invisible = dark pion invisible)
             'Brl':        Brl,
             'alphaD':     alphaD,
             'nEvent':     nEvent,

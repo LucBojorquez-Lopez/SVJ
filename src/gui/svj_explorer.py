@@ -3,12 +3,23 @@ svj_explorer.py
 ===============
 Interactive SVJ distribution explorer for Jupyter notebooks.
 
-Usage:
+Supports both the old gennorm_scan.npz format (MVN copula, 12 fixed observables)
+and the new svj_scan.npz format (MVT copula, dynamic observable selection from
+src/observables.py).
+
+Usage
+-----
     %matplotlib widget
     from svj_explorer import show
     show()
 
-Requires: ipympl  (`pip install ipympl`)
+    # or from the project root:
+    %matplotlib widget
+    import sys; sys.path.insert(0, 'src/gui')
+    from svj_explorer import show
+    show()
+
+Requires: ipympl  (pip install ipympl)
 """
 
 import numpy as np
@@ -26,15 +37,62 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
 import helpers
+from observables import OBSERVABLES, DEFAULT_SCAN, event_valid_mask
 
 _BINARY      = str(_HERE.parent / 'generate_events' / 'svj_regression')
 _DEFAULT_CFG = str(_HERE.parent / 'generate_events' / 'svj_regression.cfg')
 
 
+# ── Observable list — built from loaded NPZ or DEFAULT_SCAN ──────────────────
+
+def _build_obs_list():
+    """
+    Return (base_names, all_names, all_labels, tsv_to_arr_idx).
+
+    base_names : list[str]  — observables actually in the loaded NPZ
+    all_names  : list[str]  — base + computable derived observables
+    all_labels : list[str]  — LaTeX labels for all_names
+    tsv_to_arr : dict[int→int] — TSV column index → position in base_names
+    """
+    try:
+        helpers._build_gn_interp()
+        base_names = list(helpers._gn_meta.get('obs_names', DEFAULT_SCAN))
+    except Exception:
+        base_names = list(DEFAULT_SCAN)
+
+    tsv_to_arr = {OBSERVABLES[n]['col']: i for i, n in enumerate(base_names)
+                  if OBSERVABLES[n].get('col') is not None}
+
+    all_names  = list(base_names)
+    all_labels = [OBSERVABLES[n].get('label', n) for n in base_names]
+
+    # Append derived observables whose components are both in base_names
+    for obs_name, spec in OBSERVABLES.items():
+        dc = spec.get('derive_cols')
+        if dc is None:
+            continue
+        num_col, den_col = dc
+        if num_col in tsv_to_arr and den_col in tsv_to_arr:
+            all_names.append(obs_name)
+            all_labels.append(spec.get('label', obs_name))
+
+    return base_names, all_names, all_labels, tsv_to_arr
+
+
+_BASE_OBS, _OBS_NAMES, _OBS_LABELS, _TSV_TO_ARR = _build_obs_list()
+_N_BASE = len(_BASE_OBS)
+_N_OBS  = len(_OBS_NAMES)
+
+# Precompute indices for hemiMass enforcement
+_IDX_MASS1  = _OBS_NAMES.index('hemiMass1')  if 'hemiMass1'  in _OBS_NAMES else None
+_IDX_MASS2  = _OBS_NAMES.index('hemiMass2')  if 'hemiMass2'  in _OBS_NAMES else None
+_IDX_MRAT   = _OBS_NAMES.index('mass2/mass1') if 'mass2/mass1' in _OBS_NAMES else None
+
+
 # ── Config helpers ────────────────────────────────────────────────────────────
 
 def _parse_cfg(path=None):
-    """Return dict of numeric values from the cfg file (comments stripped, expressions evaled)."""
+    """Return dict of values from the cfg file (Python eval on each value)."""
     if path is None:
         path = _DEFAULT_CFG
     result = {}
@@ -56,7 +114,6 @@ def _parse_cfg(path=None):
 
 
 _CFG = _parse_cfg()
-# mPi and LambdaDQCD scale with mRho; rinv2 = rinv; these are truly fixed:
 _TRULY_FIXED = [
     ('mq',  'mq',  '{:.1f} GeV'),
     ('Brl', 'Brl', '{:.2f}'),
@@ -77,7 +134,7 @@ def _fixed_params_html(mRho, rinv):
 
 
 def _make_validate_cfg(mZ, mRho, rinv, alphaD, n_events=100_000):
-    """Generate cfg text for a validation run with the given slider parameters."""
+    """Write a cfg block for a validation PYTHIA run."""
     mq         = _CFG.get('mq',       4.0)
     Brl        = _CFG.get('Brl',      0.3)
     jetR       = _CFG.get('jetR',     1.0)
@@ -104,92 +161,99 @@ def _make_validate_cfg(mZ, mRho, rinv, alphaD, n_events=100_000):
     )
 
 
-def _load_true_data():
-    """Load and preprocess the most recently simulated jets_default.tsv."""
-    dataL = np.loadtxt('data/regression/jets_default.tsv')
-    mask_cols = np.array([0, 1, 2, 4, 5, 7, 8, 11, 12, 13, 14, 15])
-    data_to_fit = dataL[:, mask_cols].copy()
-    data_to_fit[:, 4] = 1 - data_to_fit[:, 4]          # thrust → 1 - thrust
-    return _add_derived(helpers.preprocess_data(data_to_fit))
-
-
-# ── Observable metadata ───────────────────────────────────────────────────────
-
-_OBS_NAMES = [
-    'leadVisPt', 'leadWidth', 'MET', 'maxMuPt', 'inv_jetThrust',
-    'hemiMass1', 'hemiMass2', 'e2c', 'e3c', 'tau1', 'tau2', 'tau3',
-    'mass2/mass1', 'e3c/e2c', 'tau2/tau1', 'tau3/tau2',
-]
-
-_OBS_LABELS = [
-    r'Lead jet $p_T$ (GeV)',
-    r'Lead jet width',
-    r'MET (GeV)',
-    r'Max $\mu$ $p_T$ (GeV)',
-    r'$1 - $ jet thrust',
-    r'Hemi-mass 1 (GeV)',
-    r'Hemi-mass 2 (GeV)',
-    r'$e_2^c$',
-    r'$e_3^c$',
-    r'$\tau_1$',
-    r'$\tau_2$',
-    r'$\tau_3$',
-    r'$m_2 / m_1$',
-    r'$e_3^c / e_2^c$',
-    r'$\tau_2 / \tau_1$',
-    r'$\tau_3 / \tau_2$',
-]
-
-# ── Derived observables (computed from base 12 columns) ──────────────────────
+# ── Derived-observable computation ────────────────────────────────────────────
 
 def _add_derived(X):
-    """Append 4 ratio columns to an N×12 array, returning N×16."""
+    """
+    Append computable derived-observable columns to an (N, n_base) array.
+    The set of derived columns is determined at module load by _TSV_TO_ARR.
+    """
     eps = 1e-10
-    r_mass  = X[:, 6] / np.maximum(X[:, 5], eps)   # hemiMass2 / hemiMass1
-    r_e     = X[:, 8] / np.maximum(X[:, 7], eps)    # e3c / e2c
-    r_tau21 = X[:, 10] / np.maximum(X[:, 9], eps)   # tau2 / tau1
-    r_tau32 = X[:, 11] / np.maximum(X[:, 10], eps)  # tau3 / tau2
-    return np.hstack([X, r_mass[:, None], r_e[:, None],
-                      r_tau21[:, None], r_tau32[:, None]])
+    derived = []
+    for obs_name, spec in OBSERVABLES.items():
+        dc = spec.get('derive_cols')
+        if dc is None:
+            continue
+        num_col, den_col = dc
+        if num_col in _TSV_TO_ARR and den_col in _TSV_TO_ARR:
+            num_idx = _TSV_TO_ARR[num_col]
+            den_idx = _TSV_TO_ARR[den_col]
+            derived.append(X[:, num_idx] / np.maximum(X[:, den_idx], eps))
+    if derived:
+        return np.hstack([X] + [c[:, None] for c in derived])
+    return X
 
 
-# ── Fixed axis ranges (computed once from grid corners at import) ─────────────
+# ── True-data loader ──────────────────────────────────────────────────────────
+
+def _load_true_data():
+    """
+    Load and extract base + derived observables from
+    data/regression/jets_default.tsv (written by VALIDATE).
+    Returns (N, n_obs_all) array in original physical units.
+
+    No range-check filtering is applied — we display all finite events
+    so the true distribution is unbiased.  The GUI cut sliders let the
+    user restrict the visible range interactively.
+    """
+    data = np.loadtxt('data/regression/jets_default.tsv', comments='#')
+    if data.ndim != 2 or data.shape[1] != 22:
+        raise ValueError(f"Expected 22-column TSV, got shape {data.shape}.")
+
+    X = np.column_stack([data[:, OBSERVABLES[n]['col']] for n in _BASE_OBS])
+    finite_mask = np.all(np.isfinite(X), axis=1)
+    return _add_derived(X[finite_mask])
+
+
+# ── Model sampling (format-agnostic) ─────────────────────────────────────────
+
+def _sample_model(mZ, mRho, rinv, alphaD, n_samples, rng):
+    """
+    Draw n_samples from the interpolated SVJ model.  Handles both the old
+    gennorm (Gaussian-copula) format and the new MVT format transparently.
+    """
+    result = helpers.interpolate_svj_params(mZ, mRho, rinv, alphaD)
+    if len(result) == 5:
+        # New format: (R_upper, nu, obs_p, param_offsets, obs_names)
+        X = helpers.sample_svj_new(*result, n_samples=n_samples, rng=rng)
+    else:
+        # Old format: (corr_66, tf_12x4)
+        X = helpers.sample_svj(*result, n_samples=n_samples, rng=rng)
+    return _add_derived(X)
+
+
+# ── Fixed axis ranges (computed once at import) ───────────────────────────────
 
 def _compute_fixed_ranges(n_corner_samples=3_000):
-    mZ_lims     = [helpers._gn_mZ_vals[0],     helpers._gn_mZ_vals[-1]]
-    mRho_lims   = [helpers._gn_mRho_vals[0],   helpers._gn_mRho_vals[-1]]
-    rinv_lims   = [helpers._gn_rinv_vals[0],   helpers._gn_rinv_vals[-1]]
-    alphaD_lims = [helpers._gn_alphaD_vals[0], helpers._gn_alphaD_vals[-1]]
+    try:
+        mZ_vals, mRho_vals, rinv_vals, alphaD_vals = helpers.gn_grid_bounds()
+    except Exception:
+        return [(0.0, 1.0)] * _N_OBS
 
-    rng = np.random.default_rng(0)
+    rng    = np.random.default_rng(0)
     chunks = []
-    for mZ_c in mZ_lims:
-        for mRho_c in mRho_lims:
-            for rinv_c in rinv_lims:
-                for alphaD_c in alphaD_lims:
+    for mZ_c in [mZ_vals[0], mZ_vals[-1]]:
+        for mRho_c in [mRho_vals[0], mRho_vals[-1]]:
+            for rinv_c in [rinv_vals[0], rinv_vals[-1]]:
+                for alphaD_c in [alphaD_vals[0], alphaD_vals[-1]]:
                     try:
-                        corr, tf = helpers.interpolate_gennorm_params(
-                            mZ_c, mRho_c, rinv_c, alphaD_c)
-                        s = helpers.sample_svj(corr, tf,
-                                               n_samples=n_corner_samples, rng=rng)
-                        chunks.append(s)
+                        chunks.append(
+                            _sample_model(mZ_c, mRho_c, rinv_c, alphaD_c,
+                                          n_corner_samples, rng))
                     except Exception:
                         pass
 
     if not chunks:
-        return [(0.0, 1.0)] * len(_OBS_NAMES)
+        return [(0.0, 1.0)] * _N_OBS
 
-    all_s = np.vstack(chunks)
-    all_s = _add_derived(all_s)
+    all_s  = np.vstack(chunks)
     ranges = []
-    for i in range(len(_OBS_NAMES)):
+    for i in range(_N_OBS):
         col = all_s[:, i]
         col = col[np.isfinite(col)]
-        if len(col) < 10:
-            ranges.append((0.0, 1.0))
-        else:
-            ranges.append((float(np.percentile(col, 1)),
-                           float(np.percentile(col, 99))))
+        ranges.append(
+            (float(np.percentile(col, 1)), float(np.percentile(col, 99)))
+            if len(col) >= 10 else (0.0, 1.0))
     return ranges
 
 
@@ -202,7 +266,7 @@ def show(n_samples=10_000):
     """
     Launch the two-feature SVJ parameter explorer.
 
-    Select any two of the 12 observables to view their marginals and joint
+    Select any two observables to view their marginals and 2-D joint
     distribution while varying the four SVJ physics parameters via sliders.
     Press VALIDATE to run a full PYTHIA simulation at the current point and
     overlay the true distributions.
@@ -212,19 +276,26 @@ def show(n_samples=10_000):
     n_samples : int
         Number of model samples to draw per update (default 10 000).
     """
-    mZ_min,     mZ_max     = helpers._gn_mZ_vals[0],     helpers._gn_mZ_vals[-1]
-    mRho_min,   mRho_max   = helpers._gn_mRho_vals[0],   helpers._gn_mRho_vals[-1]
-    rinv_min,   rinv_max   = helpers._gn_rinv_vals[0],   helpers._gn_rinv_vals[-1]
-    alphaD_min, alphaD_max = helpers._gn_alphaD_vals[0], helpers._gn_alphaD_vals[-1]
+    try:
+        mZ_vals, mRho_vals, rinv_vals, alphaD_vals = helpers.gn_grid_bounds()
+    except FileNotFoundError as e:
+        print(f"Could not load SVJ scan: {e}")
+        print("Run scan_svj.py first, then restart the notebook.")
+        return
+
+    mZ_min,     mZ_max     = mZ_vals[0],     mZ_vals[-1]
+    mRho_min,   mRho_max   = mRho_vals[0],   mRho_vals[-1]
+    rinv_min,   rinv_max   = rinv_vals[0],   rinv_vals[-1]
+    alphaD_min, alphaD_max = alphaD_vals[0], alphaD_vals[-1]
 
     # ── Mutable closure state ─────────────────────────────────────────────────
     _state = {
-        'true_data':     None,   # N×12 array after validation, else None
-        'model_samples': None,   # last sampled model array
+        'true_data':     None,
+        'model_samples': None,
         'joint_mode':    'single',
-        'ax_joint':      None,   # full-width axis (single mode)
-        'ax_joint_est':  None,   # left half (split mode)
-        'ax_joint_true': None,   # right half (split mode)
+        'ax_joint':      None,
+        'ax_joint_est':  None,
+        'ax_joint_true': None,
     }
 
     # ── Sliders ───────────────────────────────────────────────────────────────
@@ -264,7 +335,7 @@ def show(n_samples=10_000):
         layout=widgets.Layout(width='220px'))
 
     w_yfeat = widgets.Dropdown(
-        options=obs_opts, value=2,
+        options=obs_opts, value=min(2, _N_OBS - 1),
         description='Feature Y:', style={'description_width': '80px'},
         layout=widgets.Layout(width='220px'))
 
@@ -293,27 +364,22 @@ def show(n_samples=10_000):
 
     w_info = widgets.HTML(value='')
 
-    # ── All interactive widgets (for bulk enable/disable) ─────────────────────
     _all_widgets = [w_mZ, w_mRho, w_rinv, w_alphaD,
                     w_xfeat, w_yfeat, w_axes,
                     w_nsamples, w_nvalidate, w_validate]
 
-    # ── Cut widgets (per-observable range sliders) ────────────────────────────
+    # ── Cut widgets ───────────────────────────────────────────────────────────
     def _make_cut_slider(i):
         lo, hi = _FIXED_RANGES[i]
         span   = hi - lo if hi > lo else 1.0
-        step   = span / 200
         return widgets.FloatRangeSlider(
-            value=[lo, hi],
-            min=lo, max=hi, step=step,
-            description=_OBS_NAMES[i],
-            continuous_update=False,
+            value=[lo, hi], min=lo, max=hi, step=span / 200,
+            description=_OBS_NAMES[i], continuous_update=False,
             readout_format='.3g',
             style={'description_width': '100px'},
-            layout=widgets.Layout(width='340px'),
-        )
+            layout=widgets.Layout(width='340px'))
 
-    w_cuts = [_make_cut_slider(i) for i in range(len(_OBS_NAMES))]
+    w_cuts = [_make_cut_slider(i) for i in range(_N_OBS)]
 
     w_reset_cuts = widgets.Button(
         description='Reset cuts',
@@ -335,10 +401,10 @@ def show(n_samples=10_000):
     def _ensure_joint_layout(want_split):
         if want_split and _state['joint_mode'] == 'single':
             _state['ax_joint'].remove()
-            _state['ax_joint']     = None
-            _state['ax_joint_est'] = fig.add_subplot(gs[1, 0])
-            _state['ax_joint_true']= fig.add_subplot(gs[1, 1])
-            _state['joint_mode']   = 'split'
+            _state['ax_joint']      = None
+            _state['ax_joint_est']  = fig.add_subplot(gs[1, 0])
+            _state['ax_joint_true'] = fig.add_subplot(gs[1, 1])
+            _state['joint_mode']    = 'split'
         elif not want_split and _state['joint_mode'] == 'split':
             _state['ax_joint_est'].remove()
             _state['ax_joint_true'].remove()
@@ -350,7 +416,7 @@ def show(n_samples=10_000):
     # ── Cut mask ──────────────────────────────────────────────────────────────
     def _cut_mask(arr):
         mask = np.ones(len(arr), dtype=bool)
-        for i in range(len(w_cuts)):
+        for i in range(_N_OBS):
             lo, hi         = w_cuts[i].value
             lo_def, hi_def = _FIXED_RANGES[i]
             if lo > lo_def:
@@ -367,14 +433,15 @@ def show(n_samples=10_000):
         ax_xmarg.cla()
         ax_ymarg.cla()
 
-        # enforce hemiMass1 >= hemiMass2 on the estimated side
-        if xi in (5, 6, 12) or yi in (5, 6, 12):
-            X = X[X[:, 5] >= X[:, 6]]
+        # Enforce hemiMass1 >= hemiMass2 when either axis is a mass column
+        mass_idxs = {i for i in (_IDX_MASS1, _IDX_MASS2, _IDX_MRAT) if i is not None}
+        if xi in mass_idxs or yi in mass_idxs:
+            if _IDX_MASS1 is not None and _IDX_MASS2 is not None:
+                X = X[X[:, _IDX_MASS1] >= X[:, _IDX_MASS2]]
 
-        # apply user-defined per-observable cuts (estimated side)
         n_model_total = len(X)
         X = X[_cut_mask(X)]
-        n_model_pass = len(X)
+        n_model_pass  = len(X)
 
         xdata, ydata = X[:, xi], X[:, yi]
         mask = np.isfinite(xdata) & np.isfinite(ydata)
@@ -392,20 +459,19 @@ def show(n_samples=10_000):
             xrng = (float(np.percentile(xdata, 1)), float(np.percentile(xdata, 99)))
             yrng = (float(np.percentile(ydata, 1)), float(np.percentile(ydata, 99)))
 
-        # prepare true-data slices up front (needed in both marginals and joint)
         tx = ty = None
         n_true_total = n_true_pass = 0
         if true_data is not None:
             n_true_total = len(true_data)
-            true_cut = true_data[_cut_mask(true_data)]
-            n_true_pass = len(true_cut)
+            true_cut     = true_data[_cut_mask(true_data)]
+            n_true_pass  = len(true_cut)
             tx_raw = true_cut[:, xi]
             ty_raw = true_cut[:, yi]
             tmask  = np.isfinite(tx_raw) & np.isfinite(ty_raw)
             if tmask.sum() >= 20:
                 tx, ty = tx_raw[tmask], ty_raw[tmask]
 
-        # marginals
+        # Marginals
         b2 = 30
         ax_xmarg.hist(xdata, bins=b2, range=xrng, color='steelblue', alpha=0.85,
                       density=True, histtype='step', linewidth=1.5,
@@ -431,7 +497,7 @@ def show(n_samples=10_000):
             ax_xmarg.legend(fontsize=8, framealpha=0.5)
             ax_ymarg.legend(fontsize=8, framealpha=0.5)
 
-        # joint
+        # Joint
         if _state['joint_mode'] == 'single':
             ax_j = _state['ax_joint']
             ax_j.cla()
@@ -445,10 +511,9 @@ def show(n_samples=10_000):
             ax_est.cla()
             ax_true.cla()
             b = 50
-            # shared colour scale: compute both densities first, then find vmax
-            H_est, _, _ = np.histogram2d(xdata, ydata, bins=b,
-                                         range=[xrng, yrng], density=True)
-            H_true, _, _ = np.histogram2d(tx, ty, bins=b,
+            H_est,  _, _ = np.histogram2d(xdata, ydata, bins=b,
+                                          range=[xrng, yrng], density=True)
+            H_true, _, _ = np.histogram2d(tx,    ty,    bins=b,
                                           range=[xrng, yrng], density=True)
             vmax = max(H_est.max(), H_true.max())
 
@@ -464,8 +529,9 @@ def show(n_samples=10_000):
             ax_true.set_title('True (simulated)', fontsize=10)
 
         any_cut = any(
-            w_cuts[i].value[0] > _FIXED_RANGES[i][0] or w_cuts[i].value[1] < _FIXED_RANGES[i][1]
-            for i in range(len(w_cuts)))
+            w_cuts[i].value[0] > _FIXED_RANGES[i][0] or
+            w_cuts[i].value[1] < _FIXED_RANGES[i][1]
+            for i in range(_N_OBS))
         if any_cut:
             cut_html = (f'<br><span style="color:#555; font-size:0.85em">'
                         f'Cuts: model {n_model_pass:,}/{n_model_total:,}')
@@ -485,11 +551,10 @@ def show(n_samples=10_000):
         xi     = w_xfeat.value
         yi     = w_yfeat.value
         use_fixed = (w_axes.value == 'Fixed')
-
         n = w_nsamples.value
+
         try:
-            corr, tf = helpers.interpolate_gennorm_params(mZ, mRho, rinv, alphaD)
-            X = _add_derived(helpers.sample_svj(corr, tf, n_samples=n, rng=_rng))
+            X = _sample_model(mZ, mRho, rinv, alphaD, n, _rng)
         except ValueError as e:
             w_info.value = f'<span style="color:red">Error: {e}</span>'
             return
@@ -499,22 +564,21 @@ def show(n_samples=10_000):
         val_note = ''
         if _state['true_data'] is not None:
             n_true = len(_state['true_data'])
-            val_note = f'<br><span style="color:crimson; font-size:0.9em">▶ Validation: {n_true:,} true events</span>'
+            val_note = (f'<br><span style="color:crimson; font-size:0.9em">'
+                        f'▶ Validation: {n_true:,} true events</span>')
 
         w_info.value = (
             f'<span style="font-weight:bold; color:steelblue">'
             f'{n:,} samples — '
-            f'mZ\'={mZ:.0f} GeV, mRho={mRho:.1f} GeV, '
+            f"mZ'={mZ:.0f} GeV, mRho={mRho:.1f} GeV, "
             f'rinv={rinv:.2f}, alphaD={alphaD:.2f}'
             f'</span>'
             + _fixed_params_html(mRho, rinv)
             + val_note
         )
-
         _draw(X, xi, yi, use_fixed)
 
     def update_clear(_=None):
-        """Called by slider changes — clears any validation overlay."""
         _state['true_data'] = None
         update()
 
@@ -532,7 +596,7 @@ def show(n_samples=10_000):
         w_info.value = (
             '<span style="color:#c07000; font-weight:bold">'
             f'⏳ Running PYTHIA simulation ({n_val:,} events) — '
-            f'mZ\'={mZ:.0f}, mRho={mRho:.1f}, rinv={rinv:.2f}, alphaD={alphaD:.2f} …'
+            f"mZ'={mZ:.0f}, mRho={mRho:.1f}, rinv={rinv:.2f}, alphaD={alphaD:.2f} …"
             '</span>'
         )
 
@@ -547,10 +611,7 @@ def show(n_samples=10_000):
 
                 result = subprocess.run(
                     [_BINARY, tmp_path],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                )
+                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
                 if result.returncode != 0:
                     raise RuntimeError(
                         f'svj_regression exited {result.returncode}:\n'
@@ -559,15 +620,17 @@ def show(n_samples=10_000):
                 true_data = _load_true_data()
                 _state['true_data'] = true_data
 
+                n = w_nsamples.value
                 n_true = len(true_data)
                 w_info.value = (
                     f'<span style="font-weight:bold; color:steelblue">'
-                    f'{n_samples:,} samples — '
-                    f'mZ\'={mZ:.0f} GeV, mRho={mRho:.1f} GeV, '
+                    f'{n:,} samples — '
+                    f"mZ'={mZ:.0f} GeV, mRho={mRho:.1f} GeV, "
                     f'rinv={rinv:.2f}, alphaD={alphaD:.2f}'
                     f'</span>'
                     + _fixed_params_html(mRho, rinv)
-                    + f'<br><span style="color:crimson; font-size:0.9em">▶ Validation: {n_true:,} true events</span>'
+                    + f'<br><span style="color:crimson; font-size:0.9em">'
+                      f'▶ Validation: {n_true:,} true events</span>'
                 )
 
                 X = _state['model_samples']
@@ -591,15 +654,15 @@ def show(n_samples=10_000):
         w.observe(update, names='value')
     w_validate.on_click(_on_validate)
 
-    for i in range(len(w_cuts)):
+    for i in range(_N_OBS):
         w_cuts[i].observe(update, names='value')
 
     def _on_reset_cuts(_b):
-        for i in range(len(w_cuts)):
+        for i in range(_N_OBS):
             w_cuts[i].unobserve(update, names='value')
-        for i in range(len(w_cuts)):
+        for i in range(_N_OBS):
             w_cuts[i].value = list(_FIXED_RANGES[i])
-        for i in range(len(w_cuts)):
+        for i in range(_N_OBS):
             w_cuts[i].observe(update, names='value')
         update()
 
@@ -616,16 +679,15 @@ def show(n_samples=10_000):
     ])
 
     cut_panel = widgets.VBox(
-        [widgets.HTML('<b style="font-size:0.9em">Cuts &nbsp;<span style="color:#888; font-weight:normal">(drag handles; reset = full range)</span></b>')] +
+        [widgets.HTML(
+            '<b style="font-size:0.9em">Cuts &nbsp;'
+            '<span style="color:#888; font-weight:normal">'
+            '(drag handles; reset = full range)</span></b>')] +
         w_cuts +
         [w_reset_cuts],
         layout=widgets.Layout(
-            overflow_y='scroll',
-            max_height='340px',
-            border='1px solid #ccc',
-            padding='4px 8px',
-        )
-    )
+            overflow_y='scroll', max_height='340px',
+            border='1px solid #ccc', padding='4px 8px'))
 
     display(widgets.HBox(
         [left_panel, cut_panel],
