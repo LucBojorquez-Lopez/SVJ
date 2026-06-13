@@ -1,3 +1,4 @@
 Makefile
 *.ipynb
 src/generate_events/svj_regression
+logs/
