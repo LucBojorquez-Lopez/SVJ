@@ -83,6 +83,8 @@ static int    nEvent    = 100000;
 static double jetR      =    1.0;
 static double LambdaDQCD =   5.0;
 static int    nWorkers  =   10;
+static int    seedOffset =   0;   // added to worker seeds: seed = workerID+1 + seedOffset*nWorkers
+                                  // set per-job by run_svj_tsv.sh for batch TSV generation
 static int    saveTSV   =    1;   // write raw TSV; set to 0 during scan
 static int    jetsVisOnly = 1;    // 1 = store visible jet 4-momenta in jets_kinematics.tsv; 0 = full jet (incl. invisible)
 static int    dijetOnly  =  0;   // 1 = only keep events with >= 2 jets (dijet topology)
@@ -229,7 +231,7 @@ static void runWorker(int workerID, int nEvtWorker,
                       std::vector<std::vector<double>>& data,
                       std::vector<JetKin>& jetData) {
   Pythia pythia;
-  if (!setupPythia(pythia, workerID + 1)) return;
+  if (!setupPythia(pythia, workerID + 1 + seedOffset * nWorkers)) return;
 
   Event& event = pythia.event;
   fastjet::JetDefinition jet_def(fastjet::antikt_algorithm, jetR);
@@ -717,8 +719,9 @@ int main(int argc, char* argv[]) {
   nEvent     = cfgInt   (cfg, "nEvent",     nEvent);
   jetR       = cfgDouble(cfg, "jetR",       jetR);
   LambdaDQCD = cfgDouble(cfg, "LambdaDQCD", LambdaDQCD);
-  nWorkers   = cfgInt   (cfg, "nWorkers",   nWorkers);
-  saveTSV    = cfgInt   (cfg, "save_tsv",      saveTSV);
+  nWorkers   = cfgInt   (cfg, "nWorkers",    nWorkers);
+  seedOffset = cfgInt   (cfg, "seed_offset", seedOffset);
+  saveTSV    = cfgInt   (cfg, "save_tsv",    saveTSV);
   jetsVisOnly = cfgInt  (cfg, "jets_vis_only", jetsVisOnly);
   dijetOnly   = cfgInt  (cfg, "dijet_only",    dijetOnly);
   visJetPtMin = cfgDouble(cfg, "vis_jet_pt_min", visJetPtMin);

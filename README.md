@@ -131,7 +131,10 @@ The output directory is created automatically.
 
 ```
 mySVJ/
-├── Makefile                       Build target: make svj_regression
+├── Makefile                       Build target: make svj_regression  (not in git; see §0.6)
+├── run_svj_scan.sh                SLURM array job: parameter scan → svj_scan.npz
+├── run_svj_tsv.sh                 SLURM array job: batch TSV generation → jets_default.tsv
+├── merge_svj_tsv.sh               Merge per-job TSV shards after run_svj_tsv.sh
 ├── src/
 │   ├── generate_events/
 │   │   ├── svj_regression.cc      C++ event generator (PYTHIA8 + FastJet)
@@ -210,7 +213,7 @@ output_dir       = simulated
 - Move a param from `[fixed]` or `[derived]` into `[scan]` to add a scan axis.
 - Move a param from `[scan]` into `[fixed]` to hold it constant.
 - Move a param from `[fixed]` into `[derived]` to tie it to another parameter
-  (e.g. `rinv_rho = rinv_pion` makes them always equal without scanning both).
+  (e.g. `rinv_rho = rinv_pion` makes them always equal without scanning both. NOTE: Derived parameters can only be written in terms of scanning parameters, not fixed ones).
 - Any number of scan axes is supported (1-D, 2-D, 5-D, …).
 
 > **Note on `rinv_pion` / `rinv_rho`**: The C++ binary uses separate keys
@@ -305,7 +308,58 @@ python src/run_regression/scan_svj.py scan_regression.cfg \
 python src/run_regression/scan_svj.py --merge --n-jobs $N_JOBS
 ```
 
-### 1.7 Re-fit from saved raw data (`fit_raw.py`)
+### 1.7 Batch TSV generation (`run_svj_tsv.sh`)
+
+To generate a large TSV with more events than a single node can produce in one
+run, use the batch TSV script.  Each SLURM array task runs the full binary
+with the same physics parameters but a unique `seed_offset`, so the events are
+statistically independent.  The total event count is `N_JOBS × nEvent`
+(where `nEvent` comes from `svj_regression.cfg`).
+
+```bash
+# 1. Submit the array (default: 4 tasks × nEvent events each):
+sbatch run_svj_tsv.sh
+
+# 2. After all tasks finish, merge the shards:
+bash merge_svj_tsv.sh 4          # 4 = N_JOBS in run_svj_tsv.sh
+```
+
+The merge script concatenates the `#`-header from shard 0 and all data rows
+into `simulated/tsv/jets_default.tsv` (and `jets_kinematics.tsv`), then
+removes the per-job shard files.  Pass `--keep-shards` to retain them.
+
+```bash
+bash merge_svj_tsv.sh 4 --keep-shards
+```
+
+Or submit the merge as a dependent job at `sbatch` time:
+
+```bash
+ARRAY_JID=$(sbatch --parsable run_svj_tsv.sh)
+sbatch --dependency=afterok:${ARRAY_JID} --wrap "bash merge_svj_tsv.sh 4"
+```
+
+**How seed isolation works:** the binary computes each worker's PYTHIA seed as
+
+```
+seed = workerID + 1 + seed_offset × nWorkers
+```
+
+With `nWorkers = 14` and `N_JOBS = 4`:
+
+| Task | seed_offset | PYTHIA seeds used |
+|------|-------------|-------------------|
+| 0 | 0 | 1 – 14 |
+| 1 | 1 | 15 – 28 |
+| 2 | 2 | 29 – 42 |
+| 3 | 3 | 43 – 56 |
+
+No overlap, no duplicated events.  The parameter scan (`run_svj_scan.sh`) is
+unaffected — it never sets `seed_offset`, so it defaults to 0 and each
+scan-point simulation uses seeds 1..1 (one inner worker), which is correct and
+reproducible.
+
+### 1.8 Re-fit from saved raw data (`fit_raw.py`)
 
 If you saved raw events with `--save-raw`, you can re-fit with a different
 observable selection or transform pipeline without re-simulating:
