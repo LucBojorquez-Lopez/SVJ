@@ -1,0 +1,62 @@
+{
+  "obs_selection": [
+    "leadVisPt",
+    "leadWidth",
+    "MET",
+    "maxMuPt",
+    "jetThrust",
+    "hemiMass1",
+    "hemiMass2",
+    "e2c",
+    "e3c",
+    "tau1",
+    "tau2",
+    "tau3"
+  ],
+  "param_offsets": [
+    0,
+    4,
+    8,
+    12,
+    16,
+    20,
+    24,
+    28,
+    32,
+    36,
+    40,
+    44,
+    48
+  ],
+  "n_corr": 66,
+  "nu_at_index": 114,
+  "scan_axes": {
+    "mZ": [
+      499.99999999999994,
+      1414.213562373095,
+      4000.000000000001
+    ],
+    "jetR": [
+      0.4,
+      0.9
+    ],
+    "rinv_pion": [
+      0.05,
+      0.7
+    ],
+    "Brmu": [
+      0.1,
+      0.5
+    ]
+  },
+  "fixed_params": {
+    "mq": 4.0,
+    "alphaD": 0.5,
+    "mRho": 15.5
+  },
+  "derived_exprs": {
+    "mPi": "15.5* (8.0 / 15.5)",
+    "LambdaDQCD": "15.5* (5.0 / 15.5)",
+    "rinv_rho": "rinv_pion"
+  }
+}

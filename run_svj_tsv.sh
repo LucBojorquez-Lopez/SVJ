@@ -22,7 +22,7 @@
 #SBATCH --nodes=1
 #SBATCH -c 48                         # CPUs per task; should match nWorkers in svj_regression.cfg
 #SBATCH -p arguelles_delgado
-#SBATCH --mem=16G
+#SBATCH --mem=1G
 #SBATCH -t 0-02:00                    # wall time; adjust to ~2× single-run time
 #SBATCH --output=logs/svj_tsv_%A_%a.out
 #SBATCH --error=logs/svj_tsv_%A_%a.err
