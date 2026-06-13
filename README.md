@@ -12,11 +12,11 @@ re-running PYTHIA.
 
 ```
 mySVJ/
+├── Makefile                       Build target: make svj_regression
 ├── src/
 │   ├── generate_events/
 │   │   ├── svj_regression.cc      C++ event generator (PYTHIA8 + FastJet)
-│   │   ├── svj_regression.cfg     Default physics + run parameters
-│   │   └── Makefile               Build target: make svj_regression
+│   │   └── svj_regression.cfg     Default physics + run parameters
 │   ├── run_regression/
 │   │   ├── scan_svj.py            Main scan script (grid → svj_scan.npz)
 │   │   ├── scan_regression.py     Legacy 3-param MVT scan (regression_scan.npz)
@@ -33,7 +33,7 @@ mySVJ/
 │   ├── gui.ipynb
 │   └── simulated/{v1,gennorm}/   Copies of the v1 NPZ files
 ├── simulated/
-│   ├── svj/svj_scan.npz           Output of scan_svj.py  (new format)
+│   ├── svj/svj_scan.npz           Output of scan_svj.py  (new format; created on first scan run)
 │   └── v1/regression_scan.npz    Output of scan_regression.py (v1 format)
 └── data/regression/               TSV files written by the event generator
 ```
@@ -391,8 +391,7 @@ from svj_explorer import show
 show()
 ```
 
-The GUI loads `simulated/svj/svj_scan.npz` automatically (or falls back to the
-old-format `simulated/gennorm/gennorm_scan.npz` if the new file is not present).
+The GUI loads `simulated/svj/svj_scan.npz` automatically.
 
 ### 4.2 GUI controls
 
@@ -492,7 +491,7 @@ from the saved NPZ.
 
 `total_params = param_offsets[-1] + n_corr + 1` where `n_corr = n_obs*(n_obs-1)//2`.
 
-### Old format (`simulated/gennorm/gennorm_scan.npz`)
+### Old format (`old_version/simulated/v1/regression_scan.npz`)
 
 | Key | Shape | Description |
 |-----|-------|-------------|
