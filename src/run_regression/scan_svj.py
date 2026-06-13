@@ -63,6 +63,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Dict, List
 import argparse
+import resource
 
 _HERE  = Path(__file__).resolve().parent
 _SRC   = _HERE.parent
@@ -331,20 +332,25 @@ def _worker(args):
 
     Returns
     -------
-    (grid_indices, flat_params, R_upper, nu, raw_X, n_discarded)  on success
-    (grid_indices, None, None, None, None, None)                   on failure
+    (grid_indices, flat_params, R_upper, nu, raw_X, n_discarded, cpp_peak_kb)  on success
+    (grid_indices, None, None, None, None, None, cpp_peak_kb_or_0)             on failure
     """
     (task_id, grid_indices, point_params,
      nEvent, nWorkers_inner, obs_selection, save_raw) = args
 
     temp_cfg = f'/tmp/svj_scan_{task_id}.cfg'
     temp_tsv = f'/tmp/svj_scan_{task_id}.tsv'
-    fail     = (grid_indices, None, None, None, None, None)
+    fail     = (grid_indices, None, None, None, None, None, 0)
 
     write_point_cfg(temp_cfg, point_params, nEvent, nWorkers_inner, temp_tsv)
 
     try:
         proc = subprocess.run([BINARY, temp_cfg], capture_output=True, text=True)
+        # Capture C++ peak RSS immediately after binary exits (RUSAGE_CHILDREN
+        # accumulates across all subprocess.run calls in this worker process).
+        cpp_peak_kb = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+        fail = (grid_indices, None, None, None, None, None, cpp_peak_kb)
+
         if proc.returncode != 0:
             return fail
 
@@ -382,7 +388,7 @@ def _worker(args):
         raw_X = (X_valid[:, [col_map[OBSERVABLES[n]['col']] for n in obs_selection]]
                  if save_raw else None)
 
-        return (grid_indices, flat_params, R_upper, nu, raw_X, n_disc)
+        return (grid_indices, flat_params, R_upper, nu, raw_X, n_disc, cpp_peak_kb)
 
     except Exception:
         return fail
@@ -638,6 +644,7 @@ def main():
 
     raw_flat_list      = [] if save_raw else None
     raw_grid_flat_list = [] if save_raw else None
+    cpp_rss_kb_list: list = []
 
     with ProcessPoolExecutor(max_workers=n_outer) as ex:
         futs = {ex.submit(_worker, t): t for t in tasks}
@@ -651,7 +658,7 @@ def main():
                 done   += 1
                 continue
 
-            gidx, flat_p, R_upper, nu, raw_X, n_disc = result
+            gidx, flat_p, R_upper, nu, raw_X, n_disc, cpp_rss_kb = result
             done += 1
             ok    = flat_p is not None
 
@@ -665,8 +672,12 @@ def main():
                     raw_flat_list.append(raw_X)
                     raw_grid_flat_list.append(
                         np.tile(list(gidx), (n_ev, 1)))
+                if cpp_rss_kb:
+                    cpp_rss_kb_list.append(cpp_rss_kb)
             else:
                 failed += 1
+                if cpp_rss_kb:
+                    cpp_rss_kb_list.append(cpp_rss_kb)
 
             elapsed = time.time() - t0
             avg     = elapsed / done
@@ -703,6 +714,30 @@ def main():
                       np.vstack(raw_flat_list),
                       np.vstack(raw_grid_flat_list))
         print(f"Raw events → {raw_file}")
+
+    # ── Resource usage report ────────────────────────────────────────────────────
+    _self_kb   = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    _python_mb = _self_kb / 1024
+    if cpp_rss_kb_list:
+        _cpp_mb     = max(cpp_rss_kb_list) / 1024
+        _est_mb     = _cpp_mb * n_outer + _python_mb
+        _suggest_gb = max(1, int(_est_mb / 1024 * 1.5) + 1)
+    else:
+        _cpp_mb     = 0.0
+        _est_mb     = _python_mb
+        _suggest_gb = max(1, int(_est_mb / 1024 * 1.5) + 1)
+
+    print(f"\n=== Resource usage (scan) ===")
+    print(f"  Python main process peak RSS : {_python_mb:7.0f} MB")
+    if cpp_rss_kb_list:
+        print(f"  C++ binary peak RSS (max)    : {_cpp_mb:7.0f} MB"
+              f"  ({nWorkers_inn} thread(s)/point, {len(cpp_rss_kb_list)} measurements)")
+        print(f"  n_outer_workers (concurrent) : {n_outer}")
+        print(f"  Estimated concurrent peak    : {_est_mb:7.0f} MB"
+              f"  ({n_outer} × {_cpp_mb:.0f} + {_python_mb:.0f})")
+    print(f"  → suggested --mem            : {_suggest_gb}G"
+          f"  (concurrent estimate × 1.5)")
+    print(f"=============================")
 
 
 if __name__ == '__main__':
