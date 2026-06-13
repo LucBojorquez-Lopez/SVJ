@@ -98,11 +98,19 @@ def _resolve_derived(scan_point, meta):
     fixed_params  = meta.get('fixed_params',  _DEFAULT_FIXED)
     params = dict(fixed_params)
     params.update(scan_point)
-    for name, expr in derived_exprs.items():
-        try:
-            params[name] = float(eval(expr, {'__builtins__': {}}, dict(params)))
-        except Exception:
-            pass
+    unresolved = dict(derived_exprs)
+    for _ in range(len(unresolved) + 1):
+        still_pending = {}
+        for name, expr in unresolved.items():
+            try:
+                params[name] = float(eval(expr, {'__builtins__': {}}, dict(params)))
+            except NameError:
+                still_pending[name] = expr
+            except Exception:
+                pass
+        if not still_pending:
+            break
+        unresolved = still_pending
     return params
 
 

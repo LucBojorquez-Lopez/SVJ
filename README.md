@@ -99,7 +99,7 @@ EOF
 ```
 
 Adjust `PYTHIA_DIR` and `FASTJET_DIR` if your installations live elsewhere.
-The indented recipe line above uses a **tab** character — `cat << 'EOF'` preserves it.
+The indented recipe line above uses a **tab** character — `cat << 'EOF'` preserves it. Running the previous command from the terminal might lose this tab indentation for some; if so, vim into the Makefile and add that tab yourself.
 
 ### 0.7 Build the event generator
 

@@ -99,6 +99,7 @@ def read_scan_cfg(path: str) -> ScanConfig:
         inline_comment_prefixes=('#',),
         default_section=None,
     )
+    cp.optionxform = str   # preserve key case (mRho stays mRho, not mrho)
     cp.read(path)
 
     scan_axes: Dict[str, np.ndarray] = {}
@@ -145,22 +146,37 @@ def resolve_point(scan_point: dict, fixed: dict, derived_exprs: dict) -> dict:
     """
     Build a complete physics parameter dict for one grid point.
 
-    scan_point : dict of scan-axis name → value (one point on the grid)
-    fixed      : dict of fixed-parameter name → value
+    scan_point    : dict of scan-axis name → value (one point on the grid)
+    fixed         : dict of fixed-parameter name → value
     derived_exprs : dict of derived-parameter name → expression string
 
-    Expressions are evaluated with all already-resolved params in scope.
-    Only arithmetic (+, -, *, /) and parentheses are permitted.
+    Expressions may reference scan params, fixed params, or other derived params
+    in any order — a multi-pass loop resolves dependencies automatically.
+    Only arithmetic (+, -, *, /) and parentheses are permitted (no builtins).
     """
     params: dict = {}
     params.update(fixed)
     params.update(scan_point)
-    for name, expr in derived_exprs.items():
-        try:
-            params[name] = float(eval(expr, {'__builtins__': {}}, dict(params)))
-        except Exception as e:
-            raise ValueError(
-                f"Could not evaluate derived expression '{name} = {expr}': {e}")
+
+    unresolved = dict(derived_exprs)
+    for _ in range(len(unresolved) + 1):   # at most N passes for N expressions
+        still_pending = {}
+        for name, expr in unresolved.items():
+            try:
+                params[name] = float(eval(expr, {'__builtins__': {}}, dict(params)))
+            except NameError:
+                still_pending[name] = expr   # dependency not yet available; retry
+            except Exception as e:
+                raise ValueError(
+                    f"Could not evaluate derived expression '{name} = {expr}': {e}")
+        if not still_pending:
+            break
+        unresolved = still_pending
+    else:
+        raise ValueError(
+            f"Derived expressions could not be resolved (circular dependency or "
+            f"undefined name): {list(unresolved.keys())}")
+
     return params
 
 
