@@ -70,6 +70,7 @@ from observables import (
     OBSERVABLES, DEFAULT_SCAN,
     n_fitted_params, param_offsets as obs_param_offsets,
     event_valid_mask, fit_observable_col, validate_scan_selection,
+    load_tsv,
 )
 
 MRHO_MPION_RATIO  = 8.0 / 15.5
@@ -198,15 +199,17 @@ def write_point_cfg(path, params):
 
 # ── Per-observable transform + fit  ───────────────────────────────────────────
 
-def _apply_transforms(X_raw, obs_selection):
+def _apply_transforms(X_raw, obs_selection, col_map):
     """
     Apply per-observable pipeline to pre-filtered event data.
 
     Parameters
     ----------
-    X_raw : np.ndarray, shape (N, 22)
+    X_raw : np.ndarray, shape (N, n_cols)
         Raw TSV data, already filtered to valid rows.
     obs_selection : list of str
+    col_map : dict[str, int]
+        Observable name → column index, from load_tsv().
 
     Returns
     -------
@@ -221,7 +224,8 @@ def _apply_transforms(X_raw, obs_selection):
 
     for i, obs_name in enumerate(obs_selection):
         obs_spec = OBSERVABLES[obs_name]
-        col      = obs_spec['col']
+        col_name = obs_spec['col']
+        col      = col_map[col_name]
         pipeline = obs_spec['pipeline']
         dist     = obs_spec['distribution']
 
@@ -271,7 +275,7 @@ def _worker(args):
         'Brl':        Brl,        'alphaD':   alphaD,
         'nEvent':     nEvent,     'jetR':     jetR,
         'LambdaDQCD': LambdaQCD,  'nWorkers': nWorkers_inner,
-        'save_tsv':   1,          'full_obs': 1,
+        'save_tsv':   1,
         'tsv_file':   temp_tsv,
     })
 
@@ -284,25 +288,25 @@ def _worker(args):
             return fail
 
         try:
-            data = np.loadtxt(temp_tsv, comments='#')
+            data, col_map = load_tsv(temp_tsv)
         finally:
             try:
                 os.remove(temp_tsv)
             except FileNotFoundError:
                 pass
 
-        if data.ndim != 2 or data.shape[1] != 22:
+        if data.ndim != 2:
             return fail
 
         # Range check: discard events failing any observable's pipeline requirements
-        mask, n_disc = event_valid_mask(data, obs_selection)
+        mask, n_disc = event_valid_mask(data, obs_selection, col_map)
         X_valid = data[mask]
 
         if len(X_valid) < 20:
             return fail
 
         try:
-            tr_data, flat_params, offsets = _apply_transforms(X_valid, obs_selection)
+            tr_data, flat_params, offsets = _apply_transforms(X_valid, obs_selection, col_map)
         except Exception:
             return fail
 
@@ -311,7 +315,7 @@ def _worker(args):
         except Exception:
             return fail
 
-        raw_X = X_valid[:, [OBSERVABLES[n]['col'] for n in obs_selection]] if save_raw else None
+        raw_X = X_valid[:, [col_map[OBSERVABLES[n]['col']] for n in obs_selection]] if save_raw else None
 
         return (i, j, k, l, flat_params, R_upper, nu,
                 raw_X, n_disc)

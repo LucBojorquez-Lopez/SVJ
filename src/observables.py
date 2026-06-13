@@ -25,20 +25,34 @@ Add an entry to DISTRIBUTIONS referencing a scipy.stats frozen-dist-like object.
 
 To add a new observable
 -----------------------
-Add an entry to OBSERVABLES with:
-  col           : int   column index in the 22-column TSV (None for derived observables)
-  pipeline      : list of (transform_name, fixed_params_dict) or None if not regressionable
-  distribution  : str key into DISTRIBUTIONS, or None
-  default_include : bool   whether this observable is in DEFAULT_SCAN
-  label         : str  LaTeX / display label for plots
-  desc          : str  one-line physics description
+Two-step process: C++ first, then Python.
 
-Then optionally update DEFAULT_SCAN if you want it in the default regression.
+  Step 1 — src/generate_events/svj_regression.cc
+    a. Declare a local variable for the new quantity inside runWorker().
+    b. Compute its value using the existing local variables (jet loop results,
+       particle loop results, etc.) as needed.
+    c. Add its name string to OBS_NAMES (must be unique; drives the TSV header).
+    d. Append the variable to the data.push_back({...}) call at the end of
+       runWorker(), in the same position as its OBS_NAMES entry.
+    Recompile with `make svj_regression` from the project root.
+
+  Step 2 — src/observables.py (this file)
+    Add an entry to OBSERVABLES below with:
+      col           : str   name matching OBS_NAMES in svj_regression.cc (None for derived)
+      pipeline      : list of (transform_name, fixed_params_dict) or None
+      distribution  : str key into DISTRIBUTIONS, or None
+      default_include : bool   whether this observable is in DEFAULT_SCAN
+      label         : str  LaTeX / display label for plots
+      desc          : str  one-line physics description
+
+Then optionally update DEFAULT_SCAN (or set default_include=True) to include it
+in the default regression scan.
 """
 
 import numpy as np
 import scipy.stats as st
 import scipy.special as sp
+from pathlib import Path
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -195,17 +209,18 @@ DISTRIBUTIONS = {
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Observable registry  (all 22 TSV columns + 4 derived ratios)
+# Observable registry  (TSV columns + derived ratios)
 # ══════════════════════════════════════════════════════════════════════════════
-# pipeline=None means the observable is recorded in the TSV but has no
-# supported regression pipeline (discrete, angular, binary, …).  Users may
-# define a custom pipeline and set default_include=True if desired.
+# col  : observable name matching OBS_NAMES in svj_regression.cc.
+#        None for derived observables (computed from other columns; GUI only).
+# pipeline=None: TSV column exists but has no supported regression pipeline
+#                (discrete, binary, angular, …); users may add one.
 
 OBSERVABLES = {
 
-    # ── Column 0: leading visible-pT jet transverse momentum ─────────────────
+    # ── leadVisPt: leading visible-pT jet transverse momentum ────────────────
     'leadVisPt': {
-        'col':             0,
+        'col':             'leadVisPt',
         'pipeline':        [('boxcox', {})],
         'distribution':    'gennorm',
         'default_include': True,
@@ -213,9 +228,9 @@ OBSERVABLES = {
         'desc':            'Visible transverse momentum of the highest-pT jet.',
     },
 
-    # ── Column 1: leading jet angular width ───────────────────────────────────
+    # ── leadWidth: leading jet angular width ──────────────────────────────────
     'leadWidth': {
-        'col':             1,
+        'col':             'leadWidth',
         'pipeline':        [('boxcox', {})],
         'distribution':    'gennorm',
         'default_include': True,
@@ -223,9 +238,9 @@ OBSERVABLES = {
         'desc':            'pT-weighted mean angular spread of leading jet constituents.',
     },
 
-    # ── Column 2: missing transverse energy (MET proxy) ───────────────────────
+    # ── MET: missing transverse energy proxy ──────────────────────────────────
     'MET': {
-        'col':             2,
+        'col':             'MET',
         'pipeline':        [('boxcox', {})],
         'distribution':    'gennorm',
         'default_include': True,
@@ -233,11 +248,11 @@ OBSERVABLES = {
         'desc':            'Event missing ET: magnitude of negative visible pT sum.',
     },
 
-    # ── Column 3: maximum electron pT ─────────────────────────────────────────
+    # ── maxElePt: maximum electron pT ─────────────────────────────────────────
     # Often zero in SVJ events (electrons are rare).  Including this observable
     # in the regression discards all events with maxElePt = 0.
     'maxElePt': {
-        'col':             3,
+        'col':             'maxElePt',
         'pipeline':        [('boxcox', {})],
         'distribution':    'gennorm',
         'default_include': False,
@@ -245,9 +260,9 @@ OBSERVABLES = {
         'desc':            'Max final-state electron pT.  Often 0; including discards those events.',
     },
 
-    # ── Column 4: maximum muon pT ─────────────────────────────────────────────
+    # ── maxMuPt: maximum muon pT ──────────────────────────────────────────────
     'maxMuPt': {
-        'col':             4,
+        'col':             'maxMuPt',
         'pipeline':        [('boxcox', {})],
         'distribution':    'gennorm',
         'default_include': True,
@@ -255,11 +270,11 @@ OBSERVABLES = {
         'desc':            'Max final-state muon pT (from dark-rho leptonic decays).',
     },
 
-    # ── Column 5: jet thrust  (stored as thrust; regressed as 1−thrust) ───────
+    # ── jetThrust: jet thrust (stored as T; regressed as 1−T) ─────────────────
     # The raw TSV value is jetThrust ∈ [0,1].  The affine_flip maps it to
     # 1−thrust ∈ (0,1], which is then Box-Cox transformed.
     'jetThrust': {
-        'col':             5,
+        'col':             'jetThrust',
         'pipeline':        [('affine_flip', {'a': 1.0}), ('boxcox', {})],
         'distribution':    'gennorm',
         'default_include': True,
@@ -267,12 +282,12 @@ OBSERVABLES = {
         'desc':            'Leading-jet thrust T; regressed as 1−T after flipping.',
     },
 
-    # ── Column 6: event-level transverse sphericity ───────────────────────────
+    # ── transSphericity: event-level transverse sphericity ────────────────────
     # S_T ∈ [0,1]; can be exactly 0 (perfectly pencil-like events), which
     # breaks Box-Cox.  Excluded by default; can be included if zero-events are
     # rare at your parameter point.
     'transSphericity': {
-        'col':             6,
+        'col':             'transSphericity',
         'pipeline':        [('boxcox', {})],
         'distribution':    'gennorm',
         'default_include': False,
@@ -280,9 +295,9 @@ OBSERVABLES = {
         'desc':            'S_T = 2*lambda_min of the 2×2 sphericity tensor.  Can be 0.',
     },
 
-    # ── Column 7: larger hemisphere invariant mass ────────────────────────────
+    # ── hemiMass1: larger hemisphere invariant mass ───────────────────────────
     'hemiMass1': {
-        'col':             7,
+        'col':             'hemiMass1',
         'pipeline':        [('boxcox', {})],
         'distribution':    'gennorm',
         'default_include': True,
@@ -290,9 +305,9 @@ OBSERVABLES = {
         'desc':            'Larger invariant mass of the two event hemispheres (thrust split).',
     },
 
-    # ── Column 8: smaller hemisphere invariant mass ───────────────────────────
+    # ── hemiMass2: smaller hemisphere invariant mass ──────────────────────────
     'hemiMass2': {
-        'col':             8,
+        'col':             'hemiMass2',
         'pipeline':        [('boxcox', {})],
         'distribution':    'gennorm',
         'default_include': True,
@@ -300,11 +315,11 @@ OBSERVABLES = {
         'desc':            'Smaller invariant mass of the two event hemispheres.',
     },
 
-    # ── Column 9: pT balance between closest and farthest jet to MET ─────────
+    # ── ptBal: pT balance ─────────────────────────────────────────────────────
     # ptBal = |pT_close + pT_far| / (pT_close + pT_far) ∈ [0,1]; can be 0.
     # Requires ≥ 2 jets; events with only 1 jet have ptBal = 0.
     'ptBal': {
-        'col':             9,
+        'col':             'ptBal',
         'pipeline':        [('boxcox', {})],
         'distribution':    'gennorm',
         'default_include': False,
@@ -312,10 +327,10 @@ OBSERVABLES = {
         'desc':            'pT balance between the two jets closest/farthest to MET.  Can be 0.',
     },
 
-    # ── Column 10: Δφ(MET, dijet system) ─────────────────────────────────────
+    # ── dPhiMETdijet: Δφ(MET, dijet system) ──────────────────────────────────
     # Angle ∈ [0, π]; can be 0 if MET is aligned with the dijet.
     'dPhiMETdijet': {
-        'col':             10,
+        'col':             'dPhiMETdijet',
         'pipeline':        [('boxcox', {})],
         'distribution':    'gennorm',
         'default_include': False,
@@ -323,9 +338,9 @@ OBSERVABLES = {
         'desc':            'Azimuthal angle between MET and j1+j2 four-vector.  In [0,π].',
     },
 
-    # ── Column 11: 2-point energy correlator E2C ──────────────────────────────
+    # ── e2c: 2-point energy correlator ────────────────────────────────────────
     'e2c': {
-        'col':             11,
+        'col':             'e2c',
         'pipeline':        [('boxcox', {})],
         'distribution':    'gennorm',
         'default_include': True,
@@ -333,9 +348,9 @@ OBSERVABLES = {
         'desc':            'E2C = Σ_{i<j} z_i z_j ΔR_ij (pT fractions, leading jet).',
     },
 
-    # ── Column 12: 3-point energy correlator E3C ──────────────────────────────
+    # ── e3c: 3-point energy correlator ────────────────────────────────────────
     'e3c': {
-        'col':             12,
+        'col':             'e3c',
         'pipeline':        [('boxcox', {})],
         'distribution':    'gennorm',
         'default_include': True,
@@ -343,9 +358,9 @@ OBSERVABLES = {
         'desc':            'E3C = Σ_{i<j<k} z_i z_j z_k ΔR_ij ΔR_ik ΔR_jk (leading jet).',
     },
 
-    # ── Columns 13–15: N-subjettiness τ_N ────────────────────────────────────
+    # ── tau1/tau2/tau3: N-subjettiness ────────────────────────────────────────
     'tau1': {
-        'col':             13,
+        'col':             'tau1',
         'pipeline':        [('boxcox', {})],
         'distribution':    'gennorm',
         'default_include': True,
@@ -353,7 +368,7 @@ OBSERVABLES = {
         'desc':            'τ_1 (1-subjettiness); kT-seeded k-means axes, beta=1.',
     },
     'tau2': {
-        'col':             14,
+        'col':             'tau2',
         'pipeline':        [('boxcox', {})],
         'distribution':    'gennorm',
         'default_include': True,
@@ -361,7 +376,7 @@ OBSERVABLES = {
         'desc':            'τ_2 (2-subjettiness).',
     },
     'tau3': {
-        'col':             15,
+        'col':             'tau3',
         'pipeline':        [('boxcox', {})],
         'distribution':    'gennorm',
         'default_include': True,
@@ -369,11 +384,10 @@ OBSERVABLES = {
         'desc':            'τ_3 (3-subjettiness).',
     },
 
-    # ── Column 16: signed Δφ(closest jet to MET, MET) ────────────────────────
-    # Signed angle ∈ (−π, π]; use abs_value to get |Δφ| ∈ [0, π), then boxcox
-    # to handle the (0, π) range.  Still excluded by default.
+    # ── dPhiMETclose: signed Δφ(closest jet to MET, MET) ─────────────────────
+    # Signed angle ∈ (−π, π]; abs_value maps to [0, π), then boxcox.
     'dPhiMETclose': {
-        'col':             16,
+        'col':             'dPhiMETclose',
         'pipeline':        [('abs_value', {}), ('boxcox', {})],
         'distribution':    'gennorm',
         'default_include': False,
@@ -381,9 +395,9 @@ OBSERVABLES = {
         'desc':            'Signed Δφ(MET, closest jet); abs_value applied first.  Can be 0.',
     },
 
-    # ── Column 17: signed Δφ(farthest jet to MET, MET) ───────────────────────
+    # ── dPhiMETfar: signed Δφ(farthest jet to MET, MET) ──────────────────────
     'dPhiMETfar': {
-        'col':             17,
+        'col':             'dPhiMETfar',
         'pipeline':        [('abs_value', {}), ('boxcox', {})],
         'distribution':    'gennorm',
         'default_include': False,
@@ -391,10 +405,10 @@ OBSERVABLES = {
         'desc':            'Signed Δφ(MET, farthest jet); abs_value applied first.',
     },
 
-    # ── Column 18: number of jets passing selection ────────────────────────────
+    # ── nJets: number of jets passing selection ───────────────────────────────
     # Integer count ≥ 1.  BoxCox on integers is mathematically valid but unusual.
     'nJets': {
-        'col':             18,
+        'col':             'nJets',
         'pipeline':        [('boxcox', {})],
         'distribution':    'gennorm',
         'default_include': False,
@@ -402,10 +416,10 @@ OBSERVABLES = {
         'desc':            'Integer jet multiplicity.  BoxCox on counts is atypical but valid.',
     },
 
-    # ── Column 19: is the closest-to-MET jet the leading-pT jet? ─────────────
+    # ── closeJetIsLead: is the closest-to-MET jet the leading-pT jet? ─────────
     # Binary (0 or 1).  Not suitable for continuous transforms.
     'closeJetIsLead': {
-        'col':             19,
+        'col':             'closeJetIsLead',
         'pipeline':        None,
         'distribution':    None,
         'default_include': False,
@@ -413,10 +427,10 @@ OBSERVABLES = {
         'desc':            'Binary: 1 if the jet closest to MET is also the leading-pT jet.',
     },
 
-    # ── Column 20: number of dark particles in the closest jet ────────────────
+    # ── nInvClose: number of dark particles in the closest jet ────────────────
     # Integer count ≥ 0; often 0.  Not suitable for BoxCox without shifting.
     'nInvClose': {
-        'col':             20,
+        'col':             'nInvClose',
         'pipeline':        None,
         'distribution':    None,
         'default_include': False,
@@ -424,12 +438,11 @@ OBSERVABLES = {
         'desc':            'Dark pion/rho count in the closest-to-MET jet.  Often 0.',
     },
 
-    # ── Column 21: azimuthal angle of MET ─────────────────────────────────────
-    # Angle ∈ (−π, π].  abs_value maps to [0, π]; boxcox requires strictly > 0,
-    # so events with MET exactly along ±x axis (φ=0 or ±π) are discarded.
-    # Not in default regression.
+    # ── metPhi: azimuthal angle of MET ────────────────────────────────────────
+    # Angle ∈ (−π, π].  abs_value maps to [0, π]; boxcox requires > 0,
+    # so φ=0 events are discarded.
     'metPhi': {
-        'col':             21,
+        'col':             'metPhi',
         'pipeline':        [('abs_value', {}), ('boxcox', {})],
         'distribution':    'gennorm',
         'default_include': False,
@@ -446,7 +459,7 @@ OBSERVABLES = {
         'default_include': False,
         'label':           r'$m_2 / m_1$',
         'desc':            'Derived: hemiMass2 / hemiMass1.  GUI display only.',
-        'derive_cols':     (8, 7),   # (numerator_col, denominator_col) in model samples
+        'derive_cols':     ('hemiMass2', 'hemiMass1'),
     },
 
     # ── Derived: e3c / e2c ────────────────────────────────────────────────────
@@ -457,7 +470,7 @@ OBSERVABLES = {
         'default_include': False,
         'label':           r'$e_3^c / e_2^c$',
         'desc':            'Derived: e3c / e2c.  GUI display only.',
-        'derive_cols':     (12, 11),
+        'derive_cols':     ('e3c', 'e2c'),
     },
 
     # ── Derived: tau2 / tau1 ──────────────────────────────────────────────────
@@ -468,7 +481,7 @@ OBSERVABLES = {
         'default_include': False,
         'label':           r'$\tau_2 / \tau_1$',
         'desc':            'Derived: tau2 / tau1.  GUI display only.',
-        'derive_cols':     (14, 13),
+        'derive_cols':     ('tau2', 'tau1'),
     },
 
     # ── Derived: tau3 / tau2 ──────────────────────────────────────────────────
@@ -479,7 +492,7 @@ OBSERVABLES = {
         'default_include': False,
         'label':           r'$\tau_3 / \tau_2$',
         'desc':            'Derived: tau3 / tau2.  GUI display only.',
-        'derive_cols':     (15, 14),
+        'derive_cols':     ('tau3', 'tau2'),
     },
 }
 
@@ -487,6 +500,38 @@ OBSERVABLES = {
 # Edit this list (or set default_include=True in the dict above) to change what
 # gets regressed.  Every name here must have pipeline != None.
 DEFAULT_SCAN = [name for name, spec in OBSERVABLES.items() if spec['default_include']]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TSV loader
+# ══════════════════════════════════════════════════════════════════════════════
+
+def load_tsv(path):
+    """
+    Load a TSV written by svj_regression and build a column-name→index map.
+
+    The first line must be `# name0\\tname1\\t...` (the header written by the
+    C++ binary from OBS_NAMES).  Subsequent lines are numerical data rows.
+
+    Parameters
+    ----------
+    path : str or Path
+
+    Returns
+    -------
+    data : np.ndarray, shape (N, n_cols)
+    col_map : dict[str, int]
+        Observable name → column index in data.
+    """
+    path = Path(path)
+    col_map = {}
+    with open(path) as fh:
+        header = fh.readline().rstrip('\n')
+    if header.startswith('#'):
+        names = header.lstrip('#').strip().split('\t')
+        col_map = {name: i for i, name in enumerate(names)}
+    data = np.loadtxt(path, comments='#')
+    return data, col_map
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -524,7 +569,7 @@ def param_offsets(obs_selection):
     return np.concatenate([[0], np.cumsum(sizes)]).astype(int)
 
 
-def event_valid_mask(X_raw, obs_selection):
+def event_valid_mask(X_raw, obs_selection, col_map=None):
     """
     Per-event range check across all selected observables.
 
@@ -538,6 +583,10 @@ def event_valid_mask(X_raw, obs_selection):
         Raw observable values in TSV column order.
     obs_selection : list of str
         Names from OBSERVABLES to check.
+    col_map : dict[str, int] or None
+        Mapping from observable name to column index in X_raw, as returned by
+        load_tsv().  Pass None only if OBSERVABLES 'col' values are already ints
+        (legacy usage).
 
     Returns
     -------
@@ -553,10 +602,11 @@ def event_valid_mask(X_raw, obs_selection):
     for col_idx, obs_name in enumerate(obs_selection):
         obs      = OBSERVABLES[obs_name]
         pipeline = obs['pipeline'] or []
-        tsv_col  = obs['col']
-        if tsv_col is None:
+        col_name = obs['col']
+        if col_name is None:
             continue
 
+        tsv_col  = col_map[col_name] if col_map is not None else col_name
         col_data  = X_raw[:, tsv_col].copy()
         col_mask  = np.ones(len(col_data), dtype=bool)
 

@@ -3,9 +3,8 @@ svj_explorer.py
 ===============
 Interactive SVJ distribution explorer for Jupyter notebooks.
 
-Supports both the old gennorm_scan.npz format (MVN copula, 12 fixed observables)
-and the new svj_scan.npz format (MVT copula, dynamic observable selection from
-src/observables.py).
+Loads the new svj_scan.npz format (MVT copula, dynamic observable selection
+from src/observables.py).
 
 Usage
 -----
@@ -37,7 +36,7 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
 import helpers
-from observables import OBSERVABLES, DEFAULT_SCAN, event_valid_mask
+from observables import OBSERVABLES, DEFAULT_SCAN, event_valid_mask, load_tsv
 
 _BINARY      = str(_HERE.parent / 'generate_events' / 'svj_regression')
 _DEFAULT_CFG = str(_HERE.parent / 'generate_events' / 'svj_regression.cfg')
@@ -47,21 +46,20 @@ _DEFAULT_CFG = str(_HERE.parent / 'generate_events' / 'svj_regression.cfg')
 
 def _build_obs_list():
     """
-    Return (base_names, all_names, all_labels, tsv_to_arr_idx).
+    Return (base_names, all_names, all_labels, name_to_arr).
 
-    base_names : list[str]  — observables actually in the loaded NPZ
-    all_names  : list[str]  — base + computable derived observables
-    all_labels : list[str]  — LaTeX labels for all_names
-    tsv_to_arr : dict[int→int] — TSV column index → position in base_names
+    base_names  : list[str]      — observables actually in the loaded NPZ
+    all_names   : list[str]      — base + computable derived observables
+    all_labels  : list[str]      — LaTeX labels for all_names
+    name_to_arr : dict[str→int]  — observable name → position in base_names
     """
     try:
-        helpers._build_gn_interp()
-        base_names = list(helpers._gn_meta.get('obs_names', DEFAULT_SCAN))
+        helpers._build_svj_interp()
+        base_names = list(helpers._svj_meta.get('obs_names', DEFAULT_SCAN))
     except Exception:
         base_names = list(DEFAULT_SCAN)
 
-    tsv_to_arr = {OBSERVABLES[n]['col']: i for i, n in enumerate(base_names)
-                  if OBSERVABLES[n].get('col') is not None}
+    name_to_arr = {n: i for i, n in enumerate(base_names)}
 
     all_names  = list(base_names)
     all_labels = [OBSERVABLES[n].get('label', n) for n in base_names]
@@ -71,15 +69,15 @@ def _build_obs_list():
         dc = spec.get('derive_cols')
         if dc is None:
             continue
-        num_col, den_col = dc
-        if num_col in tsv_to_arr and den_col in tsv_to_arr:
+        num_name, den_name = dc
+        if num_name in name_to_arr and den_name in name_to_arr:
             all_names.append(obs_name)
             all_labels.append(spec.get('label', obs_name))
 
-    return base_names, all_names, all_labels, tsv_to_arr
+    return base_names, all_names, all_labels, name_to_arr
 
 
-_BASE_OBS, _OBS_NAMES, _OBS_LABELS, _TSV_TO_ARR = _build_obs_list()
+_BASE_OBS, _OBS_NAMES, _OBS_LABELS, _NAME_TO_ARR = _build_obs_list()
 _N_BASE = len(_BASE_OBS)
 _N_OBS  = len(_OBS_NAMES)
 
@@ -157,7 +155,6 @@ def _make_validate_cfg(mZ, mRho, rinv, alphaD, n_events=100_000):
         f'save_tsv      = 1\n'
         f'jets_vis_only = 1\n'
         f'dijet_only    = 0\n'
-        f'full_obs      = 1\n'
     )
 
 
@@ -166,7 +163,7 @@ def _make_validate_cfg(mZ, mRho, rinv, alphaD, n_events=100_000):
 def _add_derived(X):
     """
     Append computable derived-observable columns to an (N, n_base) array.
-    The set of derived columns is determined at module load by _TSV_TO_ARR.
+    The set of derived columns is determined at module load by _NAME_TO_ARR.
     """
     eps = 1e-10
     derived = []
@@ -174,10 +171,10 @@ def _add_derived(X):
         dc = spec.get('derive_cols')
         if dc is None:
             continue
-        num_col, den_col = dc
-        if num_col in _TSV_TO_ARR and den_col in _TSV_TO_ARR:
-            num_idx = _TSV_TO_ARR[num_col]
-            den_idx = _TSV_TO_ARR[den_col]
+        num_name, den_name = dc
+        if num_name in _NAME_TO_ARR and den_name in _NAME_TO_ARR:
+            num_idx = _NAME_TO_ARR[num_name]
+            den_idx = _NAME_TO_ARR[den_name]
             derived.append(X[:, num_idx] / np.maximum(X[:, den_idx], eps))
     if derived:
         return np.hstack([X] + [c[:, None] for c in derived])
@@ -196,11 +193,11 @@ def _load_true_data():
     so the true distribution is unbiased.  The GUI cut sliders let the
     user restrict the visible range interactively.
     """
-    data = np.loadtxt('data/regression/jets_default.tsv', comments='#')
-    if data.ndim != 2 or data.shape[1] != 22:
-        raise ValueError(f"Expected 22-column TSV, got shape {data.shape}.")
+    data, col_map = load_tsv('data/regression/jets_default.tsv')
+    if data.ndim != 2:
+        raise ValueError(f"Expected 2-D TSV, got shape {data.shape}.")
 
-    X = np.column_stack([data[:, OBSERVABLES[n]['col']] for n in _BASE_OBS])
+    X = np.column_stack([data[:, col_map[OBSERVABLES[n]['col']]] for n in _BASE_OBS])
     finite_mask = np.all(np.isfinite(X), axis=1)
     return _add_derived(X[finite_mask])
 
@@ -208,17 +205,9 @@ def _load_true_data():
 # ── Model sampling (format-agnostic) ─────────────────────────────────────────
 
 def _sample_model(mZ, mRho, rinv, alphaD, n_samples, rng):
-    """
-    Draw n_samples from the interpolated SVJ model.  Handles both the old
-    gennorm (Gaussian-copula) format and the new MVT format transparently.
-    """
+    """Draw n_samples from the interpolated SVJ model."""
     result = helpers.interpolate_svj_params(mZ, mRho, rinv, alphaD)
-    if len(result) == 5:
-        # New format: (R_upper, nu, obs_p, param_offsets, obs_names)
-        X = helpers.sample_svj_new(*result, n_samples=n_samples, rng=rng)
-    else:
-        # Old format: (corr_66, tf_12x4)
-        X = helpers.sample_svj(*result, n_samples=n_samples, rng=rng)
+    X = helpers.sample_svj_new(*result, n_samples=n_samples, rng=rng)
     return _add_derived(X)
 
 
@@ -226,7 +215,7 @@ def _sample_model(mZ, mRho, rinv, alphaD, n_samples, rng):
 
 def _compute_fixed_ranges(n_corner_samples=3_000):
     try:
-        mZ_vals, mRho_vals, rinv_vals, alphaD_vals = helpers.gn_grid_bounds()
+        mZ_vals, mRho_vals, rinv_vals, alphaD_vals = helpers.svj_grid_bounds()
     except Exception:
         return [(0.0, 1.0)] * _N_OBS
 
@@ -277,7 +266,7 @@ def show(n_samples=10_000):
         Number of model samples to draw per update (default 10 000).
     """
     try:
-        mZ_vals, mRho_vals, rinv_vals, alphaD_vals = helpers.gn_grid_bounds()
+        mZ_vals, mRho_vals, rinv_vals, alphaD_vals = helpers.svj_grid_bounds()
     except FileNotFoundError as e:
         print(f"Could not load SVJ scan: {e}")
         print("Run scan_svj.py first, then restart the notebook.")

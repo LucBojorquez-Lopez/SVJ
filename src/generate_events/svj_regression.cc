@@ -86,7 +86,6 @@ static int    nWorkers  =   10;
 static int    saveTSV   =    1;   // write raw TSV; set to 0 during scan
 static int    jetsVisOnly = 1;    // 1 = store visible jet 4-momenta in jets_kinematics.tsv; 0 = full jet (incl. invisible)
 static int    dijetOnly  =  0;   // 1 = only keep events with >= 2 jets (dijet topology)
-static int    fullObs    =  1;   // 1 = compute all observables; 0 = only leadVisPt/leadWidth/MET (fast scan mode)
 static double visJetPtMin = 20.0; // min visible pT (GeV) for a jet to be kept
 static std::string tsvFile    = "data/regression/jets_default.tsv";
 static std::string tsvKinFile = "data/regression/jets_kinematics.tsv";
@@ -168,8 +167,6 @@ static bool setupPythia(Pythia& pythia, int seed) {
     // lep_br  = Brl * (1 - rinv2)  → mu+mu-
     // bott_br = (1 - Brl) * (1 - rinv2)  → bb-bar
     // These always sum to (1 - rinv2), together with rinv2 giving total = 1.
-    // NOTE: existing gennorm_scan.npz was generated with old absolute Brl
-    //       (Brl=0.3 absolute muon BR, rinv2=rinv).
     double lep_br  = Brl * (1.0 - rinv2);
     double bott_br = (1.0 - Brl) * (1.0 - rinv2);
     std::ostringstream lep, bott, inv2;
@@ -209,177 +206,27 @@ static bool setupPythia(Pythia& pythia, int seed) {
   return pythia.init();
 }
 
-// ── 3×3 symmetric linear algebra (analytic / no external deps) ───────────────
-
-static double det3(const double s[3][3]) {
-  return s[0][0]*(s[1][1]*s[2][2] - s[1][2]*s[1][2])
-        -s[0][1]*(s[0][1]*s[2][2] - s[1][2]*s[0][2])
-        +s[0][2]*(s[0][1]*s[1][2] - s[1][1]*s[0][2]);
-}
-
-// Inverse of symmetric 3×3 via cofactors (result stored in inv[][]).
-static void inv3(const double s[3][3], double r[3][3]) {
-  double d = det3(s);
-  r[0][0] =  (s[1][1]*s[2][2] - s[1][2]*s[1][2]) / d;
-  r[0][1] = r[1][0] = -(s[0][1]*s[2][2] - s[1][2]*s[0][2]) / d;
-  r[0][2] = r[2][0] =  (s[0][1]*s[1][2] - s[1][1]*s[0][2]) / d;
-  r[1][1] =  (s[0][0]*s[2][2] - s[0][2]*s[0][2]) / d;
-  r[1][2] = r[2][1] = -(s[0][0]*s[1][2] - s[0][1]*s[0][2]) / d;
-  r[2][2] =  (s[0][0]*s[1][1] - s[0][1]*s[0][1]) / d;
-}
-
-// Mahalanobis distance squared: (x-mu)^T Sinv (x-mu)
-static double mahal3(const double* x, const double* mu,
-                     const double si[3][3]) {
-  double d0 = x[0]-mu[0], d1 = x[1]-mu[1], d2 = x[2]-mu[2];
-  return d0*(si[0][0]*d0 + si[0][1]*d1 + si[0][2]*d2)
-        +d1*(si[1][0]*d0 + si[1][1]*d1 + si[1][2]*d2)
-        +d2*(si[2][0]*d0 + si[2][1]*d1 + si[2][2]*d2);
-}
-
-// ── Multivariate-t EM fit (p = 3) ────────────────────────────────────────────
-// Returns fitted (mu, Sigma, nu) where Sigma is the scatter matrix
-// (not the covariance; for a t-dist, Cov = nu/(nu-2)*Sigma when nu>2).
-//
-// Output 10 scalars in order:
-//   mu[0..2],  Sigma[00 01 02 11 12 22],  nu
-
-struct MVTResult {
-  double mu[3];
-  double Sigma[3][3];
-  double nu;
-  int    n_used;
+// ── Observable names ─────────────────────────────────────────────────────────
+// ADD NEW OBSERVABLES HERE (step 1 of 2):
+//   1. Add the name string to OBS_NAMES (append at end to preserve existing order).
+//   2. Compute the observable in runWorker() and append it to data.push_back({...}).
+// The Python side (src/observables.py) reads column names from the TSV header at
+// runtime — no integer indices to synchronise.
+static const std::vector<std::string> OBS_NAMES = {
+    "leadVisPt", "leadWidth", "MET",
+    "maxElePt",  "maxMuPt",
+    "jetThrust", "transSphericity",
+    "hemiMass1", "hemiMass2",
+    "ptBal",     "dPhiMETdijet",
+    "e2c",       "e3c",
+    "tau1",      "tau2",   "tau3",
+    "dPhiMETclose", "dPhiMETfar", "nJets",
+    "closeJetIsLead", "nInvClose", "metPhi",
 };
 
-static MVTResult fitMVT(const std::vector<std::array<double,3>>& data,
-                         int maxIter = 200, double tol = 1e-6) {
-  const int p = 3;
-  int n = (int)data.size();
-
-  // ── initialise from sample mean & covariance ──
-  double mu[3] = {0,0,0};
-  for (auto& x : data)
-    for (int i=0; i<3; i++) mu[i] += x[i];
-  for (int i=0; i<3; i++) mu[i] /= n;
-
-  double Sigma[3][3] = {};
-  for (auto& x : data) {
-    double d[3] = {x[0]-mu[0], x[1]-mu[1], x[2]-mu[2]};
-    for (int i=0; i<3; i++)
-      for (int j=0; j<3; j++)
-        Sigma[i][j] += d[i]*d[j];
-  }
-  for (int i=0; i<3; i++)
-    for (int j=0; j<3; j++)
-      Sigma[i][j] /= n;
-
-  double nu = 10.0;
-  double prevLL = -1e30;
-
-  std::vector<double> w(n), delta(n);
-
-  for (int iter = 0; iter < maxIter; iter++) {
-
-    // ── E-step: Mahalanobis distances and weights ──
-    double Sinv[3][3];
-    inv3(Sigma, Sinv);
-    double wsum = 0.0;
-    for (int k = 0; k < n; k++) {
-      delta[k] = mahal3(data[k].data(), mu, Sinv);
-      w[k]     = (nu + p) / (nu + delta[k]);
-      wsum    += w[k];
-    }
-
-    // ── M-step: mu ──
-    double mu_new[3] = {0,0,0};
-    for (int k = 0; k < n; k++)
-      for (int i = 0; i < 3; i++)
-        mu_new[i] += w[k] * data[k][i];
-    for (int i = 0; i < 3; i++) mu_new[i] /= wsum;
-
-    // ── M-step: Sigma ──
-    double Sigma_new[3][3] = {};
-    for (int k = 0; k < n; k++) {
-      double d[3] = {data[k][0]-mu_new[0],
-                     data[k][1]-mu_new[1],
-                     data[k][2]-mu_new[2]};
-      for (int i = 0; i < 3; i++)
-        for (int j = 0; j < 3; j++)
-          Sigma_new[i][j] += w[k] * d[i] * d[j];
-    }
-    for (int i = 0; i < 3; i++)
-      for (int j = 0; j < 3; j++)
-        Sigma_new[i][j] /= n;
-
-    // ── Precompute delta_new for nu search ──
-    double Sinv_new[3][3];
-    inv3(Sigma_new, Sinv_new);
-    double logdet_new = std::log(std::fabs(det3(Sigma_new)));
-    for (int k = 0; k < n; k++)
-      delta[k] = mahal3(data[k].data(), mu_new, Sinv_new);
-
-    // ── M-step: nu via golden-section over log(nu) in [-4.6, 6.9] ──
-    // i.e., nu in [~0.01, ~1000]
-    auto negLL = [&](double log_nu) -> double {
-      double nu_t = std::exp(log_nu);
-      double ll = n * (std::lgamma((nu_t+p)/2.) - std::lgamma(nu_t/2.)
-                       - (p/2.) * std::log(nu_t))
-                 - (n/2.) * logdet_new;
-      for (int k = 0; k < n; k++)
-        ll -= ((nu_t+p)/2.) * std::log1p(delta[k] / nu_t);
-      return -ll;
-    };
-
-    double a = -4.6, b = 6.9;
-    const double phi = (std::sqrt(5.0) - 1.0) / 2.0;
-    for (int gs = 0; gs < 60; gs++) {
-      double c = b - phi*(b-a);
-      double dd = a + phi*(b-a);
-      if (negLL(c) < negLL(dd)) b = dd;
-      else                       a = c;
-    }
-    double nu_new = std::exp((a+b) / 2.0);
-
-    // ── Convergence check via log-likelihood ──
-    double ll = n * (std::lgamma((nu_new+p)/2.) - std::lgamma(nu_new/2.)
-                     - (p/2.) * std::log(nu_new))
-               - (n/2.) * logdet_new;
-    for (int k = 0; k < n; k++)
-      ll -= ((nu_new+p)/2.) * std::log1p(delta[k] / nu_new);
-
-    for (int i = 0; i < 3; i++) mu[i] = mu_new[i];
-    for (int i = 0; i < 3; i++)
-      for (int j = 0; j < 3; j++)
-        Sigma[i][j] = Sigma_new[i][j];
-    nu = nu_new;
-
-    if (std::fabs(ll - prevLL) < tol) break;
-    prevLL = ll;
-  }
-
-  MVTResult res;
-  for (int i = 0; i < 3; i++) res.mu[i] = mu[i];
-  for (int i = 0; i < 3; i++)
-    for (int j = 0; j < 3; j++)
-      res.Sigma[i][j] = Sigma[i][j];
-  res.nu = nu;
-  res.n_used = n;
-  return res;
-}
-
-// ── Worker: collect per-event observables ────────────────────────────────────
-// data[] layout (22 values per event):
-//   0  leadVisPt     1  leadWidth     2  MET
-//   3  maxElePt      4  maxMuPt
-//   5  jetThrust     6  transSphericity
-//   7  hemiMass1     8  hemiMass2
-//   9  ptBal         10 dPhiMETdijet
-//   11 e2c           12 e3c
-//   13 tau1          14 tau2          15 tau3
-//   16 dPhiMETclose  17 dPhiMETfar    18 nJets
-//   19 closeJetIsLead  20 nInvClose   21 metPhi
+// ── Worker: collect per-event observables ─────────────────────────────────────
 static void runWorker(int workerID, int nEvtWorker,
-                      std::vector<std::array<double,22>>& data,
+                      std::vector<std::vector<double>>& data,
                       std::vector<JetKin>& jetData) {
   Pythia pythia;
   if (!setupPythia(pythia, workerID + 1)) return;
@@ -418,22 +265,20 @@ static void runWorker(int workerID, int nEvtWorker,
       else
         ptag = TAG_VIS;
 
-      if (fullObs) {
-        // Max electron and muon pT (from final-state particles)
-        if (aid == 11) {
-          double ept = std::sqrt(p.px()*p.px() + p.py()*p.py());
-          if (ept > max_ele_pt) max_ele_pt = ept;
-        }
-        if (aid == 13) {
-          double mpt = std::sqrt(p.px()*p.px() + p.py()*p.py());
-          if (mpt > max_mu_pt) max_mu_pt = mpt;
-        }
-        // Event-level transverse sphericity tensor: all visible+muon particles
-        if (ptag < TAG_INV) {
-          double px = p.px(), py = p.py();
-          s_xx += px*px; s_xy += px*py; s_yy += py*py;
-          s_pt2 += px*px + py*py;
-        }
+      // Max electron and muon pT (from final-state particles)
+      if (aid == 11) {
+        double ept = std::sqrt(p.px()*p.px() + p.py()*p.py());
+        if (ept > max_ele_pt) max_ele_pt = ept;
+      }
+      if (aid == 13) {
+        double mpt = std::sqrt(p.px()*p.px() + p.py()*p.py());
+        if (mpt > max_mu_pt) max_mu_pt = mpt;
+      }
+      // Event-level transverse sphericity tensor: all visible+muon particles
+      if (ptag < TAG_INV) {
+        double px = p.px(), py = p.py();
+        s_xx += px*px; s_xy += px*py; s_yy += py*py;
+        s_pt2 += px*px + py*py;
       }
 
       fastjet::PseudoJet pj(p.px(), p.py(), p.pz(), p.e());
@@ -485,20 +330,17 @@ static void runWorker(int workerID, int nEvtWorker,
       evt_vis_px += vis_px;
       evt_vis_py += vis_py;
       ++n_jets;
-      if (fullObs) {
-        jet_vis_vecs.emplace_back(vis_px, vis_py);
-        int n_dark = 0;
-        for (const auto& c : jet.constituents())
-          if (c.user_index() == TAG_DARK) ++n_dark;
-        jet_inv_counts.push_back(n_dark);
-      }
 
-      if (fullObs) {
-        // Accumulate all visible constituents for event-level hemisphere masses
-        for (const auto& c2 : jet.constituents()) {
-          if (c2.user_index() >= TAG_INV) continue;
-          all_vis_constits.push_back({c2.px(), c2.py(), c2.pz(), c2.e()});
-        }
+      jet_vis_vecs.emplace_back(vis_px, vis_py);
+      int n_dark = 0;
+      for (const auto& c : jet.constituents())
+        if (c.user_index() == TAG_DARK) ++n_dark;
+      jet_inv_counts.push_back(n_dark);
+
+      // Accumulate all visible constituents for event-level hemisphere masses
+      for (const auto& c2 : jet.constituents()) {
+        if (c2.user_index() >= TAG_INV) continue;
+        all_vis_constits.push_back({c2.px(), c2.py(), c2.pz(), c2.e()});
       }
 
       // Track leading visible-pT jet for regression + substructure observables
@@ -507,15 +349,13 @@ static void runWorker(int workerID, int nEvtWorker,
         sub_vis_pt  = lead_vis_pt;
         j1_vis_px   = vis_px;  j1_vis_py = vis_py;
         lead_vis_pt = vis_pt;
-        if (fullObs) lead_vis_idx = (int)jet_vis_vecs.size() - 1;
+        lead_vis_idx = (int)jet_vis_vecs.size() - 1;
         lead_width  = (width_den > 0) ? width_num / width_den : 0.0;
-        if (fullObs) {
-          // Save visible constituents of leading jet for substructure (E2C, E3C, tauN)
-          lead_constits.clear();
-          for (const auto& c2 : jet.constituents()) {
-            if (c2.user_index() >= TAG_INV) continue;
-            lead_constits.push_back({c2.px(), c2.py(), c2.pz(), c2.e()});
-          }
+        // Save visible constituents of leading jet for substructure (E2C, E3C, tauN)
+        lead_constits.clear();
+        for (const auto& c2 : jet.constituents()) {
+          if (c2.user_index() >= TAG_INV) continue;
+          lead_constits.push_back({c2.px(), c2.py(), c2.pz(), c2.e()});
         }
       } else if (vis_pt > sub_vis_pt) {
         j2_vis_px = vis_px; j2_vis_py = vis_py;
@@ -618,7 +458,7 @@ static void runWorker(int workerID, int nEvtWorker,
     // ── pT balance: |pT_close + pT_far| / (pT_close + pT_far) ──
     // close/far = jet with smallest/largest delta-phi to MET, over all passing jets.
     double pt_bal = 0.0;
-    if (fullObs && n_jets >= 2) {
+    if (n_jets >= 2) {
       double min_dphi = 4.0, max_dphi = -1.0;
       int close_idx = 0, far_idx = 0;
       for (int jj = 0; jj < (int)jet_vis_vecs.size(); ++jj) {
@@ -640,7 +480,7 @@ static void runWorker(int workerID, int nEvtWorker,
 
     // ── delta-phi(MET, dijet): azimuthal angle between MET and j1+j2 ──
     double dphi_met_dijet = 0.0;
-    if (fullObs && n_jets >= 2) {
+    if (n_jets >= 2) {
       double dijet_phi = std::atan2(j1_vis_py + j2_vis_py, j1_vis_px + j2_vis_px);
       double dphi = std::fabs(dijet_phi - met_phi);
       if (dphi > PI) dphi = 2*PI - dphi;
@@ -652,7 +492,7 @@ static void runWorker(int workerID, int nEvtWorker,
     // Close/far determined by |dphi|; stored values are signed.
     double dphi_met_close = 0.0, dphi_met_far = 0.0;
     int close_idx = 0;
-    if (fullObs && n_jets >= 1) {
+    if (n_jets >= 1) {
       double min_abs = 4.0, max_abs = -1.0;
       for (int jj = 0; jj < (int)jet_vis_vecs.size(); ++jj) {
         double jphi = std::atan2(jet_vis_vecs[jj].second, jet_vis_vecs[jj].first);
@@ -668,7 +508,7 @@ static void runWorker(int workerID, int nEvtWorker,
     // ── is closest jet the leading-pT jet? / dark particle count in closest jet ──
     double close_jet_is_lead = 0.0;
     double n_inv_close       = 0.0;
-    if (fullObs && n_jets >= 1) {
+    if (n_jets >= 1) {
       close_jet_is_lead = (close_idx == lead_vis_idx) ? 1.0 : 0.0;
       n_inv_close       = (double)jet_inv_counts[close_idx];
     }
@@ -842,6 +682,8 @@ static void runWorker(int workerID, int nEvtWorker,
       }
     }
 
+    // ADD NEW OBSERVABLE COMPUTATIONS ABOVE THIS LINE, then append to push_back below.
+    // Keep push_back values in the same order as OBS_NAMES.
     data.push_back({lead_vis_pt, lead_width, met,
                     max_ele_pt, max_mu_pt, thrust,
                     spher, hemi_mass1, hemi_mass2,
@@ -879,7 +721,6 @@ int main(int argc, char* argv[]) {
   saveTSV    = cfgInt   (cfg, "save_tsv",      saveTSV);
   jetsVisOnly = cfgInt  (cfg, "jets_vis_only", jetsVisOnly);
   dijetOnly   = cfgInt  (cfg, "dijet_only",    dijetOnly);
-  fullObs     = cfgInt  (cfg, "full_obs",      fullObs);
   visJetPtMin = cfgDouble(cfg, "vis_jet_pt_min", visJetPtMin);
   tsvFile     = cfgStr  (cfg, "tsv_file",      tsvFile);
   tsvKinFile  = cfgStr  (cfg, "tsv_kin_file",  tsvKinFile);
@@ -893,7 +734,7 @@ int main(int argc, char* argv[]) {
   int base      = nEvent / nWorkers;
   int remainder = nEvent % nWorkers;
 
-  std::vector<std::vector<std::array<double,22>>> results(nWorkers);
+  std::vector<std::vector<std::vector<double>>> results(nWorkers);
   std::vector<std::vector<JetKin>> jetResults(nWorkers);
   std::vector<std::thread> threads;
   threads.reserve(nWorkers);
@@ -913,26 +754,19 @@ int main(int argc, char* argv[]) {
     if (!tsvKinDir.empty()) std::filesystem::create_directories(tsvKinDir);
 
     std::ofstream fOut(tsvFile);
-    fOut << "# leadVisPt\tleadWidth\tMET"
-            "\tmaxElePt\tmaxMuPt"
-            "\tjetThrust\ttransSphericity"
-            "\themiMass1\themiMass2"
-            "\tptBal\tdPhiMETdijet"
-            "\te2c\te3c"
-            "\ttau1\ttau2\ttau3"
-            "\tdPhiMETclose\tdPhiMETfar\tnJets"
-            "\tcloseJetIsLead\tnInvClose\tmetPhi\n";
+    fOut << "#";
+    for (size_t i = 0; i < OBS_NAMES.size(); ++i)
+      fOut << "\t" << OBS_NAMES[i];
+    fOut << "\n";
     fOut << std::scientific << std::setprecision(6);
     for (const auto& rows : results)
-      for (const auto& r : rows)
-        fOut << r[0]  << "\t" << r[1]  << "\t" << r[2]  << "\t"
-             << r[3]  << "\t" << r[4]  << "\t" << r[5]  << "\t"
-             << r[6]  << "\t" << r[7]  << "\t" << r[8]  << "\t"
-             << r[9]  << "\t" << r[10] << "\t"
-             << r[11] << "\t" << r[12] << "\t"
-             << r[13] << "\t" << r[14] << "\t" << r[15] << "\t"
-             << r[16] << "\t" << r[17] << "\t" << r[18] << "\t"
-             << r[19] << "\t" << r[20] << "\t" << r[21] << "\n";
+      for (const auto& r : rows) {
+        for (size_t i = 0; i < r.size(); ++i) {
+          if (i > 0) fOut << "\t";
+          fOut << r[i];
+        }
+        fOut << "\n";
+      }
 
     std::ofstream fJets(tsvKinFile);
     fJets << std::scientific << std::setprecision(6);
@@ -945,45 +779,6 @@ int main(int argc, char* argv[]) {
               << jk.j2_px   << "\t" << jk.j2_py << "\t"
               << jk.j2_pz   << "\t" << jk.j2_E  << "\n";
   }
-
-  // Aggregate workers, apply transform, filter
-  std::vector<std::array<double,3>> fitData;
-  for (const auto& rows : results) {
-    for (const auto& r : rows) {
-      double pT = r[0], width = r[1], met = r[2];
-      if (width <= 0.0 || met <= 0.0) continue;
-      fitData.push_back({pT, std::log(width), std::log(met)});
-    }
-  }
-
-  if ((int)fitData.size() < 10) {
-    std::cerr << "Error: only " << fitData.size()
-              << " events passed filter — cannot fit.\n";
-    std::cout << "RESULT: nan nan nan nan nan nan nan nan nan nan\n";
-    return 1;
-  }
-
-  MVTResult res = fitMVT(fitData);
-  std::cerr << "Fit used " << res.n_used << " events, nu = " << res.nu << "\n";
-
-  // Print 10 fitted parameters to stdout.
-  // Format: RESULT: mu0 mu1 mu2 S00 S01 S02 S11 S12 S22 nu
-  // (mu0=mean pT, mu1=mean log(width), mu2=mean log(MET);
-  //  S** are upper-triangle of the 3x3 scatter matrix;
-  //  nu is the degrees-of-freedom parameter)
-  std::cout << std::setprecision(10) << std::scientific
-            << "RESULT:"
-            << " " << res.mu[0]
-            << " " << res.mu[1]
-            << " " << res.mu[2]
-            << " " << res.Sigma[0][0]
-            << " " << res.Sigma[0][1]
-            << " " << res.Sigma[0][2]
-            << " " << res.Sigma[1][1]
-            << " " << res.Sigma[1][2]
-            << " " << res.Sigma[2][2]
-            << " " << res.nu
-            << "\n";
 
   return 0;
 }

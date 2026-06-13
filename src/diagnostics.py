@@ -25,6 +25,7 @@ sys.path.insert(0, str(_SRC))
 from observables import (
     OBSERVABLES, TRANSFORMS, DISTRIBUTIONS, DEFAULT_SCAN,
     event_valid_mask, fit_observable_col, validate_scan_selection,
+    load_tsv,
 )
 
 
@@ -42,7 +43,7 @@ def plot_observable_transforms(
     Parameters
     ----------
     tsv_path : str or Path
-        Path to the TSV output of svj_regression (22-column format).
+        Path to a TSV written by svj_regression (header line `# col0\\tcol1\\t...`).
     obs : str or list of str
         'default' → DEFAULT_SCAN; otherwise a list of observable names,
         or a comma-separated string.
@@ -74,15 +75,14 @@ def plot_observable_transforms(
 
     # Load TSV
     tsv_path = Path(tsv_path)
-    data = np.loadtxt(tsv_path, comments='#')
-    if data.ndim != 2 or data.shape[1] != 22:
-        raise ValueError(
-            f"Expected 22-column TSV, got shape {data.shape}.")
+    data, col_map = load_tsv(tsv_path)
+    if data.ndim != 2:
+        raise ValueError(f"Expected 2-D TSV, got shape {data.shape}.")
 
     n_total = len(data)
 
     # Range check + filter
-    mask, n_disc_per_obs = event_valid_mask(data, obs_selection)
+    mask, n_disc_per_obs = event_valid_mask(data, obs_selection, col_map)
     X_valid = data[mask]
     n_used  = len(X_valid)
     n_disc_total = n_total - n_used
@@ -101,10 +101,11 @@ def plot_observable_transforms(
     figs = []
     for obs_name in obs_selection:
         obs_spec = OBSERVABLES[obs_name]
-        col      = obs_spec['col']
-        pipeline = obs_spec['pipeline'] or []
+        col_name  = obs_spec['col']
+        col       = col_map[col_name]
+        pipeline  = obs_spec['pipeline'] or []
         dist_name = obs_spec['distribution']
-        label    = obs_spec.get('label', obs_name)
+        label     = obs_spec.get('label', obs_name)
 
         x_raw = X_valid[:, col].copy()
 

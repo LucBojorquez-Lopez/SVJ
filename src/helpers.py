@@ -3,14 +3,12 @@ src/helpers.py
 ==============
 Interpolation helpers and KLD utilities for the SVJ regression model.
 
-Supports two NPZ formats:
-  • "new" format (svj_scan.npz from scan_svj.py):
-      param_flat, param_offsets, corr_start, nu_idx, obs_names
-  • "old" format (gennorm_scan.npz from v1, used by old_version/):
-      corr_params, transform_params, obs_names
+Loads svj_scan.npz (new format, from scan_svj.py):
+    param_flat, param_offsets, corr_start, nu_idx, obs_names
 
-Both formats are loaded lazily: the files are read on first use, so importing
-this module does not fail if the NPZ files are not present yet.
+Also supports the v1 scan (simulated/v1/regression_scan.npz) for KLD utilities.
+Both NPZ files are loaded lazily: importing this module does not fail if they
+are not present yet.
 """
 
 import numpy as np
@@ -32,9 +30,8 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 # Lazy-loaded NPZ data
 # ══════════════════════════════════════════════════════════════════════════════
 
-_v1_data   = None   # v1 regression_scan.npz
-_gn_data   = None   # svj_scan.npz or gennorm_scan.npz (new or old format)
-_gn_new    = None   # True if _gn_data is new format
+_v1_data  = None   # v1 regression_scan.npz
+_svj_data = None   # svj_scan.npz
 
 
 def _load_v1():
@@ -50,23 +47,17 @@ def _load_v1():
     return _v1_data
 
 
-def _load_gn():
-    global _gn_data, _gn_new
-    if _gn_data is None:
-        # Prefer new-format path; fall back to old-format path for backward compat.
-        new_path = _REPO_ROOT / 'simulated/svj/svj_scan.npz'
-        old_path = _REPO_ROOT / 'simulated/gennorm/gennorm_scan.npz'
-        path = new_path if new_path.exists() else old_path
+def _load_svj():
+    global _svj_data
+    if _svj_data is None:
+        path = _REPO_ROOT / 'simulated/svj/svj_scan.npz'
         try:
-            _gn_data = np.load(path, allow_pickle=True)
+            _svj_data = np.load(path, allow_pickle=True)
         except FileNotFoundError:
             raise FileNotFoundError(
-                f"SVJ scan NPZ not found. Expected either:\n"
-                f"  {new_path}  (new format, from scan_svj.py)\n"
-                f"  {old_path}  (old format)\n"
+                f"SVJ scan NPZ not found at {path}.\n"
                 "Run scan_svj.py first.")
-        _gn_new = 'param_flat' in _gn_data
-    return _gn_data, _gn_new
+    return _svj_data
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -261,7 +252,7 @@ def corner_kld_grid(n_workers=10):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Legacy transform helpers (kept for backward compatibility / notebooks)
+# Legacy transform helpers (kept for v1 notebook compatibility)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def BoxCox(datap, l):
@@ -310,71 +301,52 @@ def transform_data(data):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Gennorm scan — supports both old and new NPZ formats
+# SVJ scan interpolator (svj_scan.npz)
 # ══════════════════════════════════════════════════════════════════════════════
 
-_gn_interp = None
-_gn_meta   = {}   # corr_start, nu_idx, param_offsets, obs_names, n_obs
+_svj_interp = None
+_svj_meta   = {}   # corr_start, nu_idx, param_offsets, obs_names, n_obs
 
 
-def gn_grid_bounds():
+def svj_grid_bounds():
     """
     Return (mZ_vals, mRho_vals, rinv_vals, alphaD_vals) from the loaded SVJ scan.
     Triggers a lazy load of the scan NPZ if needed.
     """
-    gn, _ = _load_gn()
-    return (gn['mZ_vals'], gn['mRho_vals'], gn['rinv_vals'], gn['alphaD_vals'])
+    svj = _load_svj()
+    return (svj['mZ_vals'], svj['mRho_vals'], svj['rinv_vals'], svj['alphaD_vals'])
 
 
-def _build_gn_interp():
-    global _gn_interp, _gn_meta
-    if _gn_interp is not None:
+def _build_svj_interp():
+    global _svj_interp, _svj_meta
+    if _svj_interp is not None:
         return
 
-    gn, is_new = _load_gn()
-    mZ   = gn['mZ_vals']
-    mRho = gn['mRho_vals']
-    rinv = gn['rinv_vals']
-    aD   = gn['alphaD_vals']
+    svj = _load_svj()
+    mZ   = svj['mZ_vals']
+    mRho = svj['mRho_vals']
+    rinv = svj['rinv_vals']
+    aD   = svj['alphaD_vals']
 
-    if is_new:
-        # New format: flat param vector
-        param_flat    = np.array(gn['param_flat'])
-        param_offsets = np.array(gn['param_offsets'], dtype=int)
-        corr_start    = int(gn['corr_start'])
-        nu_idx        = int(gn['nu_idx'])
-        obs_names     = list(gn['obs_names'])
-        n_obs         = len(obs_names)
-        n_corr        = n_obs * (n_obs - 1) // 2
-        _gn_meta = {
-            'is_new':        True,
-            'param_offsets': param_offsets,
-            'corr_start':    corr_start,
-            'nu_idx':        nu_idx,
-            'obs_names':     obs_names,
-            'n_obs':         n_obs,
-            'n_corr':        n_corr,
-        }
-        data_arr = param_flat
-    else:
-        # Old format: corr_params (grid..., 66) + transform_params (grid..., 12, 4)
-        N_OBS  = 12
-        N_CORR = 66
-        corr_arr = np.array(gn['corr_params'])
-        tf_arr   = np.array(gn['transform_params'])
-        data_arr = np.concatenate(
-            [corr_arr, tf_arr.reshape(tf_arr.shape[:4] + (N_OBS * 4,))],
-            axis=-1)
-        _gn_meta = {
-            'is_new':    False,
-            'n_obs':     N_OBS,
-            'n_corr':    N_CORR,
-            'obs_names': list(gn['obs_names']),
-        }
+    param_flat    = np.array(svj['param_flat'])
+    param_offsets = np.array(svj['param_offsets'], dtype=int)
+    corr_start    = int(svj['corr_start'])
+    nu_idx        = int(svj['nu_idx'])
+    obs_names     = list(svj['obs_names'])
+    n_obs         = len(obs_names)
+    n_corr        = n_obs * (n_obs - 1) // 2
+    _svj_meta = {
+        'param_offsets': param_offsets,
+        'corr_start':    corr_start,
+        'nu_idx':        nu_idx,
+        'obs_names':     obs_names,
+        'n_obs':         n_obs,
+        'n_corr':        n_corr,
+    }
 
-    _gn_interp = RegularGridInterpolator(
+    _svj_interp = RegularGridInterpolator(
         (mZ, mRho, rinv, aD),
-        data_arr,
+        param_flat,
         method='linear',
         bounds_error=True,
     )
@@ -384,89 +356,41 @@ def interpolate_svj_params(mZ, mRho, rinv, alphaD):
     """
     Return all interpolated SVJ scan parameters at the given physics point.
 
-    For the new NPZ format (svj_scan.npz) returns a 5-tuple:
-        (corr_upper, nu, flat_obs_params, param_offsets, obs_names)
+    Returns a 5-tuple:
+        (R_upper, nu, flat_obs_params, param_offsets, obs_names)
 
-    For the old NPZ format (gennorm_scan.npz) returns a 2-tuple:
-        (corr_params_66, transform_params_12x4)
-
-    The caller can distinguish the two by checking len(result).
+    R_upper         : np.ndarray, shape (K*(K-1)//2,)  upper-triangle of K×K MVT corr matrix
+    nu              : float                             degrees of freedom
+    flat_obs_params : np.ndarray                        all per-observable transform + dist params
+    param_offsets   : np.ndarray, shape (K+1,)          index into flat_obs_params per observable
+    obs_names       : list of str                        observable names in regression order
     """
-    _build_gn_interp()
-    p = _gn_interp([[mZ, mRho, rinv, alphaD]])[0]
-    m = _gn_meta
+    _build_svj_interp()
+    p = _svj_interp([[mZ, mRho, rinv, alphaD]])[0]
+    m = _svj_meta
 
-    if m['is_new']:
-        cs   = m['corr_start']
-        ni   = m['nu_idx']
-        obs_p = p[:cs]
-        R_upper = p[cs:ni]
-        nu      = float(p[ni])
-        return R_upper, nu, obs_p, m['param_offsets'], m['obs_names']
-    else:
-        n_corr = m['n_corr']
-        n_obs  = m['n_obs']
-        return p[:n_corr], p[n_corr:].reshape(n_obs, 4)
-
-
-def interpolate_gennorm_params(mZ, mRho, rinv, alphaD):
-    """Deprecated alias for interpolate_svj_params — use that instead."""
-    return interpolate_svj_params(mZ, mRho, rinv, alphaD)
-
-
-def sample_svj(corr_params_66, transform_params_12x4, n_samples=100_000, rng=None):
-    """
-    Draw samples from the old-format 12-observable gennorm SVJ model
-    (Gaussian copula + Box-Cox + gennorm marginals).
-
-    Parameters
-    ----------
-    corr_params_66 : array-like, shape (66,)
-    transform_params_12x4 : array-like, shape (12, 4)  [lam, beta, loc, scale]
-
-    Returns
-    -------
-    X : np.ndarray, shape (n_samples, 12)
-    """
-    _build_gn_interp()
-    N_OBS  = _gn_meta['n_obs']
-    corr_66 = np.asarray(corr_params_66)
-    tf      = np.asarray(transform_params_12x4)
-
-    R = np.zeros((N_OBS, N_OBS))
-    R[np.triu_indices(N_OBS, k=1)] = corr_66
-    R += R.T
-    np.fill_diagonal(R, 1.0)
-
-    mu = np.zeros(N_OBS)
-    if rng is None:
-        z = np.random.multivariate_normal(mu, R, size=n_samples)
-    else:
-        z = rng.multivariate_normal(mu, R, size=n_samples)
-
-    X = np.empty_like(z)
-    for i in range(N_OBS):
-        lam, beta, loc, scale = tf[i]
-        u       = np.clip(st.norm.cdf(z[:, i]), 1e-10, 1.0 - 1e-10)
-        x_bc    = st.gennorm.ppf(u, beta, loc=loc, scale=scale)
-        X[:, i] = sp.inv_boxcox(x_bc, lam)
-    return X
+    cs      = m['corr_start']
+    ni      = m['nu_idx']
+    obs_p   = p[:cs]
+    R_upper = p[cs:ni]
+    nu      = float(p[ni])
+    return R_upper, nu, obs_p, m['param_offsets'], m['obs_names']
 
 
 def sample_svj_new(R_upper, nu, flat_obs_params, param_offsets, obs_names,
                    n_samples=100_000, rng=None):
     """
-    Draw samples from the new-format MVT-copula SVJ model.
+    Draw samples from the SVJ MVT-copula model.
 
     Uses the observable inverse pipeline from src/observables.py.
 
     Parameters
     ----------
-    R_upper       : array-like, shape (K*(K-1)//2,)
-    nu            : float
+    R_upper         : array-like, shape (K*(K-1)//2,)
+    nu              : float
     flat_obs_params : array-like, shape (total_obs_params,)
-    param_offsets : array-like, shape (K+1,)
-    obs_names     : list of str
+    param_offsets   : array-like, shape (K+1,)
+    obs_names       : list of str
 
     Returns
     -------
@@ -494,7 +418,7 @@ def sample_svj_new(R_upper, nu, flat_obs_params, param_offsets, obs_names,
     u = np.clip(st.t.cdf(Z, df=nu), 1e-10, 1.0 - 1e-10)   # (n_samples, K)
 
     X = np.empty((n_samples, K))
-    param_offsets = np.asarray(param_offsets, dtype=int)
+    param_offsets   = np.asarray(param_offsets, dtype=int)
     flat_obs_params = np.asarray(flat_obs_params)
 
     for i, obs_name in enumerate(obs_names):

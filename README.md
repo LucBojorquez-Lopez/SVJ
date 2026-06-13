@@ -8,6 +8,95 @@ re-running PYTHIA.
 
 ---
 
+## 0 · Setup
+
+### 0.1 Prerequisites
+
+| Requirement | Minimum version | Notes |
+|-------------|-----------------|-------|
+| Linux x86-64 | — | Binary is ELF 64-bit; macOS not tested |
+| g++ | 9 | C++17 `<filesystem>` required |
+| Python | 3.8 | |
+| PYTHIA | 8.317 | built in-place; see §0.3 |
+| FastJet | 3.5.1 | installed with `--prefix`; see §0.4 |
+
+### 0.2 Required directory layout
+
+The Makefile hardcodes `PYTHIA_DIR = ../pythia8317` and `FASTJET_DIR = ../fastjet3`,
+so both libraries must live **as siblings** of this repository:
+
+```
+<parent>/
+├── pythia8317/    # PYTHIA 8.317 built in-place (§0.3)
+├── fastjet3/      # FastJet ≥ 3 installed with --prefix (§0.4)
+└── mySVJ/         # this repo  ← you are here
+```
+
+### 0.3 Install PYTHIA 8.317
+
+```bash
+# Run from <parent>/ (one level above mySVJ/)
+wget https://pythia.org/download/pythia83/pythia8317.tgz
+tar xzf pythia8317.tgz        # extracts to pythia8317/
+cd pythia8317
+./configure
+make -j$(nproc)
+cd ..
+```
+
+This builds PYTHIA in-place; no `make install` step is needed.
+The shared library ends up at `pythia8317/lib/libpythia8.so`.
+
+### 0.4 Install FastJet 3.5.1
+
+```bash
+# Run from <parent>/
+wget http://fastjet.fr/repo/fastjet-3.5.1.tar.gz
+tar xzf fastjet-3.5.1.tar.gz
+cd fastjet-3.5.1
+./configure --prefix="$(pwd)/../fastjet3"
+make -j$(nproc) install
+cd ..
+```
+
+This installs the library to `fastjet3/` and the config binary to
+`fastjet3/bin/fastjet-config`, which the Makefile queries for compiler/linker flags.
+
+### 0.5 Install Python packages
+
+```bash
+pip install numpy "scipy>=1.6" matplotlib ipywidgets ipympl jupyterlab
+```
+
+`scipy ≥ 1.6` is required for `scipy.stats.multivariate_t`.
+`ipympl` enables the `%matplotlib widget` backend used by the Jupyter GUI.
+
+### 0.6 Build the event generator
+
+```bash
+# From the mySVJ/ root:
+make svj_regression
+```
+
+This compiles `src/generate_events/svj_regression.cc` against PYTHIA8 and FastJet
+and writes the binary to `src/generate_events/svj_regression`.
+
+> **Important**: A pre-compiled binary is tracked in git, but it has absolute library
+> paths baked in from the original build machine.  Always re-run `make svj_regression`
+> after a fresh clone before trying to run or scan.
+
+### 0.7 Verify the build
+
+```bash
+# From the mySVJ/ root (the binary resolves ../pythia8317 relative to here):
+src/generate_events/svj_regression src/generate_events/svj_regression.cfg
+```
+
+A successful run writes `data/regression/jets_default.tsv` (~50 000 events).
+Both output directories are created automatically.
+
+---
+
 ## Directory layout
 
 ```
@@ -19,8 +108,7 @@ mySVJ/
 │   │   └── svj_regression.cfg     Default physics + run parameters
 │   ├── run_regression/
 │   │   ├── scan_svj.py            Main scan script (grid → svj_scan.npz)
-│   │   ├── scan_regression.py     Legacy 3-param MVT scan (regression_scan.npz)
-│   │   ├── scan_regression.cfg    Shared config for both scan scripts
+│   │   ├── scan_regression.cfg    Config for scan_svj.py (grid axes, physics params)
 │   │   └── fit_raw.py             Re-fit from saved raw events (no re-simulation)
 │   ├── gui/
 │   │   └── svj_explorer.py        Jupyter notebook interactive explorer
@@ -34,7 +122,7 @@ mySVJ/
 │   └── simulated/{v1,gennorm}/   Copies of the v1 NPZ files
 ├── simulated/
 │   ├── svj/svj_scan.npz           Output of scan_svj.py  (new format; created on first scan run)
-│   └── v1/regression_scan.npz    Output of scan_regression.py (v1 format)
+│   └── v1/regression_scan.npz    V1 archived data (gennorm + MVN copula, 12 obs)
 └── data/regression/               TSV files written by the event generator
 ```
 
@@ -153,20 +241,25 @@ and each must have a non-`None` `pipeline` and `distribution`.
 
 ### 1.6 SLURM array jobs
 
-Split the grid across multiple array jobs:
+A ready-to-use SLURM array script is at the project root:
 
 ```bash
-# Submit N=4 jobs (job indices 0..3)
-for i in 0 1 2 3; do
-    sbatch --export=JOB_INDEX=$i,N_JOBS=4 my_slurm_script.sh
-done
+sbatch run_svj_scan.sh          # submits a 4-task array (tasks 0–3)
 
-# In the SLURM script:
+# After all tasks finish, merge their partial NPZs:
+python src/run_regression/scan_svj.py --merge --n-jobs 4
+```
+
+Edit `run_svj_scan.sh` to change the array size, partition, or resource requests.
+To split manually:
+
+```bash
+# In any SLURM script body:
 python src/run_regression/scan_svj.py scan_regression.cfg \
-    --job-index $JOB_INDEX --n-jobs $N_JOBS
+    --job-index $SLURM_ARRAY_TASK_ID --n-jobs $N_JOBS
 
 # After all jobs finish, merge:
-python src/run_regression/scan_svj.py --merge --n-jobs 4
+python src/run_regression/scan_svj.py --merge --n-jobs $N_JOBS
 ```
 
 ### 1.7 Re-fit from saved raw data (`fit_raw.py`)
@@ -242,30 +335,52 @@ parameters during MLE (e.g. `floc=0` to fix location to zero).
 
 ### 2.3 Adding a new observable
 
+Adding a new observable is a two-step process.
+
+**Step 1 — C++: `src/generate_events/svj_regression.cc`**
+
+1. Declare a local variable for the new quantity inside `runWorker()` (near the
+   other observable declarations, e.g. `double myObs = 0.0;`).
+2. Compute its value using the existing local variables available at that point
+   (jet kinematics, constituent arrays, particle-loop sums, etc.).
+3. Append its name to `OBS_NAMES` at the top of the file:
+   ```cpp
+   static const std::vector<std::string> OBS_NAMES = {
+       ...,
+       "myObs",   // ← add here
+   };
+   ```
+4. Append the variable to `data.push_back({...})` at the end of `runWorker()`,
+   in the same position as its `OBS_NAMES` entry.
+5. Rebuild: `make svj_regression` from the project root.
+
+**Step 2 — Python: `src/observables.py`**
+
 Add an entry to the `OBSERVABLES` dict:
 
 ```python
 OBSERVABLES['myObs'] = {
-    'col':             18,         # column index in the 22-col TSV (None if derived)
-    'pipeline':        [('boxcox', {})],   # ordered list of (transform_name, fixed_params)
-    'distribution':    'gennorm',  # key in DISTRIBUTIONS
-    'default_include': False,      # include in DEFAULT_SCAN?
-    'label':           r'My observable',   # LaTeX label for plots
+    'col':             'myObs',    # must match the name in OBS_NAMES (step 1)
+    'pipeline':        [('boxcox', {})],
+    'distribution':    'gennorm',
+    'default_include': False,
+    'label':           r'My observable',
     'desc':            'One-line physics description',
 }
 ```
 
-For a **derived** observable (computed as a ratio of two base observables):
+For a **derived** observable (ratio of two base observables; GUI display only,
+no regression):
 
 ```python
-OBSERVABLES['obs_a/obs_b'] = {
+OBSERVABLES['obsA/obsB'] = {
     'col':             None,
     'pipeline':        None,
     'distribution':    None,
     'default_include': False,
     'label':           r'$a/b$',
-    'desc':            'Derived: obs_a / obs_b.  GUI display only.',
-    'derive_cols':     (col_a, col_b),   # TSV column indices (numerator, denominator)
+    'desc':            'Derived: obsA / obsB.  GUI display only.',
+    'derive_cols':     ('obsA', 'obsB'),  # observable names (numerator, denominator)
 }
 ```
 
@@ -317,7 +432,7 @@ This uses `DEFAULT_SCAN` and shows all 12 default observables.
 
 ```python
 figs = plot_observable_transforms(
-    tsv_path,           # str or Path — required; 22-column TSV
+    tsv_path,           # str or Path — required
     obs='default',      # 'default' | list of names | comma-separated string
     n_events=None,      # int — subsample to first N valid events (default: all)
     figsize_per_obs=(12, 3),   # (width, height) per observable figure
@@ -327,7 +442,7 @@ figs = plot_observable_transforms(
 
 | Argument | Type | Description |
 |----------|------|-------------|
-| `tsv_path` | str/Path | Path to the 22-column TSV written by `svj_regression` |
+| `tsv_path` | str/Path | Path to the TSV written by `svj_regression` |
 | `obs` | str/list | `'default'` = DEFAULT_SCAN; `'leadVisPt,MET'` or `['leadVisPt','MET']` |
 | `n_events` | int/None | Subsample after filtering (useful for quick checks) |
 | `figsize_per_obs` | tuple | Figure dimensions per observable row |
@@ -370,7 +485,6 @@ All physics parameters for this run are in `src/generate_events/svj_regression.c
 | `nWorkers` | 14 | Parallel C++ threads |
 | `save_tsv` | 1 | Write `jets_default.tsv` (set 0 to skip) |
 | `vis_jet_pt_min` | 100.0 | Minimum visible jet pT threshold (GeV) |
-| `full_obs` | 1 | Compute all 22 observables (0 = only leadVisPt/leadWidth/MET; for debugging) |
 
 > `mPi` and `LambdaDQCD` in this file are hardcoded floats.  If you change
 > `mRho`, update them manually: `mPi = 8/15.5 * mRho`, `LambdaDQCD = 5/15.5 * mRho`, if you want to keep the ratio the same.
@@ -437,18 +551,15 @@ import sys; sys.path.insert(0, 'src')
 import helpers
 
 # Get grid bounds
-mZ_vals, mRho_vals, rinv_vals, alphaD_vals = helpers.gn_grid_bounds()
+mZ_vals, mRho_vals, rinv_vals, alphaD_vals = helpers.svj_grid_bounds()
 
 # Interpolate fitted parameters at any (mZ, mRho, rinv, alphaD) inside the grid
-result = helpers.interpolate_gennorm_params(mZ=1500, mRho=20, rinv=0.3, alphaD=0.4)
+R_upper, nu, obs_params, param_offsets, obs_names = helpers.interpolate_svj_params(
+    mZ=1500, mRho=20, rinv=0.3, alphaD=0.4)
 
-# Sample — format-agnostic (handles both old and new NPZ)
-if len(result) == 5:
-    # New MVT format: (R_upper, nu, obs_params_flat, param_offsets, obs_names)
-    X = helpers.sample_svj_new(*result, n_samples=50_000)
-else:
-    # Old gennorm format: (corr_66, tf_12x4)
-    X = helpers.sample_svj(*result, n_samples=50_000)
+# Sample from the interpolated distribution
+X = helpers.sample_svj_new(R_upper, nu, obs_params, param_offsets, obs_names,
+                            n_samples=50_000)
 # X has shape (n_samples, n_obs) in original physical units
 ```
 
@@ -491,16 +602,14 @@ from the saved NPZ.
 
 `total_params = param_offsets[-1] + n_corr + 1` where `n_corr = n_obs*(n_obs-1)//2`.
 
-### Old format (`old_version/simulated/v1/regression_scan.npz`)
+### V1 format (`simulated/v1/regression_scan.npz`)
+
+12-observable Box-Cox + gennorm marginals, MVN copula.  Used by `old_version/` only.
 
 | Key | Shape | Description |
 |-----|-------|-------------|
 | `corr_params` | `(grid..., 66)` | MVN correlation upper-triangle (12 observables) |
 | `transform_params` | `(grid..., 12, 4)` | `[lam, beta, loc, scale]` per observable |
 | `obs_names` | `(12,)` | Observable names |
-| `scan_params` | `(grid..., 6)` | Same as above |
+| `scan_params` | `(grid..., 6)` | `[mZ, mRho, mPi, LambdaQCD, rinv, alphaD]` per point |
 | `mZ_vals`, ... | 1-D | Grid axis values |
-
----
-
-*Environment setup (PYTHIA8, FastJet, Python packages) will be documented separately.*
