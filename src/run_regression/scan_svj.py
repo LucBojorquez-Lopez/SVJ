@@ -448,7 +448,7 @@ def _save_raw_npz(out_file, raw_flat, raw_grid_flat):
 
 # ── Merge helper ───────────────────────────────────────────────────────────────
 
-def _merge(out_dir, n_jobs):
+def _merge(out_dir, n_jobs, keep_shards=False):
     files = [out_dir / f'svj_scan_{i}.npz' for i in range(n_jobs)]
     missing = [str(f) for f in files if not f.exists()]
     if missing:
@@ -482,6 +482,14 @@ def _merge(out_dir, n_jobs):
     for name in axis_names:
         kwargs[f'{name}_vals'] = d0[f'{name}_vals']
     np.savez(out_file, **kwargs)
+    print(f"Saved → {out_file}")
+
+    if keep_shards:
+        print(f"Shard files kept (--keep-shards).")
+    else:
+        for f in files:
+            f.unlink(missing_ok=True)
+        print(f"Removed {len(files)} shard file(s).")
 
     n_done  = int(np.sum(np.all(np.isfinite(param_flat), axis=-1)))
     n_total = param_flat[..., 0].size
@@ -503,6 +511,8 @@ def main():
                         help='Total number of parallel job slices')
     parser.add_argument('--merge', action='store_true',
                         help='Merge per-job NPZs into svj_scan.npz and exit')
+    parser.add_argument('--keep-shards', action='store_true',
+                        help='Keep per-job shard NPZs after merging (default: delete on success)')
     parser.add_argument('--save-raw', action='store_true',
                         help='Save pre-transform event data alongside the NPZ')
     args = parser.parse_args()
@@ -515,7 +525,7 @@ def main():
 
     if args.merge:
         out_dir.mkdir(parents=True, exist_ok=True)
-        _merge(out_dir, n_jobs)
+        _merge(out_dir, n_jobs, keep_shards=args.keep_shards)
         return
 
     scan_cfg_path = args.cfg

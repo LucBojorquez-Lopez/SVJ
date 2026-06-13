@@ -518,6 +518,9 @@ A summary line reports how many events passed the range checks.
 ### 3.1 Basic call
 
 ```python
+%load_ext autoreload 
+%autoreload 2 # so that changes in observables.py are reflected upon rerun, without requiring a kernel restart.
+
 from src.diagnostics import plot_observable_transforms
 
 figs = plot_observable_transforms('simulated/tsv/jets_default.tsv')

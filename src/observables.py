@@ -398,7 +398,7 @@ OBSERVABLES = {
     # ── dPhiMETfar: signed Δφ(farthest jet to MET, MET) ──────────────────────
     'dPhiMETfar': {
         'col':             'dPhiMETfar',
-        'pipeline':        [('abs_value', {}), ('boxcox', {})],
+        'pipeline':        [('abs_value', {}),('affine_flip', {'a':np.pi}), ('boxcox', {})],
         'distribution':    'gennorm',
         'default_include': False,
         'label':           r'$|\Delta\phi|$(MET, far jet)',
