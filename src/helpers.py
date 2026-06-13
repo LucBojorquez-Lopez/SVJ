@@ -310,11 +310,14 @@ _svj_meta   = {}   # corr_start, nu_idx, param_offsets, obs_names, n_obs
 
 def svj_grid_bounds():
     """
-    Return (mZ_vals, mRho_vals, rinv_vals, alphaD_vals) from the loaded SVJ scan.
-    Triggers a lazy load of the scan NPZ if needed.
+    Return a dict {axis_name: vals_array} for each scan axis in the loaded NPZ.
+
+    The set of axes (and their order) reflects whatever was in [scan] when the
+    scan was run — no hardcoded assumption about which parameters were scanned.
     """
-    svj = _load_svj()
-    return (svj['mZ_vals'], svj['mRho_vals'], svj['rinv_vals'], svj['alphaD_vals'])
+    svj        = _load_svj()
+    axis_names = list(svj['axis_names'])
+    return {name: np.array(svj[f'{name}_vals']) for name in axis_names}
 
 
 def _build_svj_interp():
@@ -322,11 +325,9 @@ def _build_svj_interp():
     if _svj_interp is not None:
         return
 
-    svj = _load_svj()
-    mZ   = svj['mZ_vals']
-    mRho = svj['mRho_vals']
-    rinv = svj['rinv_vals']
-    aD   = svj['alphaD_vals']
+    svj        = _load_svj()
+    axis_names = list(svj['axis_names'])
+    axes       = tuple(np.array(svj[f'{name}_vals']) for name in axis_names)
 
     param_flat    = np.array(svj['param_flat'])
     param_offsets = np.array(svj['param_offsets'], dtype=int)
@@ -335,7 +336,9 @@ def _build_svj_interp():
     obs_names     = list(svj['obs_names'])
     n_obs         = len(obs_names)
     n_corr        = n_obs * (n_obs - 1) // 2
+
     _svj_meta = {
+        'axis_names':    axis_names,
         'param_offsets': param_offsets,
         'corr_start':    corr_start,
         'nu_idx':        nu_idx,
@@ -345,29 +348,39 @@ def _build_svj_interp():
     }
 
     _svj_interp = RegularGridInterpolator(
-        (mZ, mRho, rinv, aD),
+        axes,
         param_flat,
         method='linear',
         bounds_error=True,
     )
 
 
-def interpolate_svj_params(mZ, mRho, rinv, alphaD):
+def interpolate_svj_params(params):
     """
     Return all interpolated SVJ scan parameters at the given physics point.
 
-    Returns a 5-tuple:
-        (R_upper, nu, flat_obs_params, param_offsets, obs_names)
+    Parameters
+    ----------
+    params : dict[str, float]
+        Must contain a value for every scan axis that was used when building
+        the NPZ (keys are the names from the [scan] section of the config).
+        Extra keys are silently ignored.
 
-    R_upper         : np.ndarray, shape (K*(K-1)//2,)  upper-triangle of K×K MVT corr matrix
-    nu              : float                             degrees of freedom
-    flat_obs_params : np.ndarray                        all per-observable transform + dist params
-    param_offsets   : np.ndarray, shape (K+1,)          index into flat_obs_params per observable
-    obs_names       : list of str                        observable names in regression order
+    Returns
+    -------
+    (R_upper, nu, flat_obs_params, param_offsets, obs_names)
+
+    R_upper         : np.ndarray, shape (K*(K-1)//2,)
+    nu              : float
+    flat_obs_params : np.ndarray
+    param_offsets   : np.ndarray, shape (K+1,)
+    obs_names       : list of str
     """
     _build_svj_interp()
-    p = _svj_interp([[mZ, mRho, rinv, alphaD]])[0]
-    m = _svj_meta
+    axis_names = _svj_meta['axis_names']
+    point      = np.array([[params[name] for name in axis_names]])
+    p          = _svj_interp(point)[0]
+    m          = _svj_meta
 
     cs      = m['corr_start']
     ni      = m['nu_idx']

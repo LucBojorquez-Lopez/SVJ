@@ -3,8 +3,10 @@ svj_explorer.py
 ===============
 Interactive SVJ distribution explorer for Jupyter notebooks.
 
-Loads the new svj_scan.npz format (MVT copula, dynamic observable selection
-from src/observables.py).
+Loads svj_scan.npz (MVT copula, dynamic observable and parameter selection).
+The slider set is built at runtime from the scan axes stored in the NPZ, so
+adding or removing scan axes in scan_regression.cfg automatically updates the
+explorer without code changes.
 
 Usage
 -----
@@ -21,6 +23,8 @@ Usage
 Requires: ipympl  (pip install ipympl)
 """
 
+import json
+import itertools
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
@@ -33,13 +37,73 @@ import os
 import sys
 from pathlib import Path
 
-_HERE = Path(__file__).resolve().parent
+_HERE     = Path(__file__).resolve().parent
+_REPO     = _HERE.parent.parent
 sys.path.insert(0, str(_HERE.parent))
 import helpers
 from observables import OBSERVABLES, DEFAULT_SCAN, event_valid_mask, load_tsv
 
 _BINARY      = str(_HERE.parent / 'generate_events' / 'svj_regression')
 _DEFAULT_CFG = str(_HERE.parent / 'generate_events' / 'svj_regression.cfg')
+_META_PATH   = _REPO / 'simulated' / 'svj' / 'svj_scan_meta.json'
+
+# Per-parameter slider step sizes (used when building dynamic sliders)
+_PARAM_STEPS = {
+    'mZ': 50.0, 'mRho': 0.5, 'mq': 0.1,
+    'rinv_pion': 0.01, 'rinv_rho': 0.01,
+    'alphaD': 0.01, 'Brmu': 0.01,
+    'jetR': 0.1, 'mPi': 0.1, 'LambdaDQCD': 0.1,
+}
+
+# Human-readable slider descriptions
+_PARAM_LABELS = {
+    'mZ':        "mZ' (GeV)",
+    'mRho':      'mRho (GeV)',
+    'mPi':       'mPi (GeV)',
+    'mq':        'mq (GeV)',
+    'rinv_pion': 'rinv_pion',
+    'rinv_rho':  'rinv_rho',
+    'alphaD':    'alphaD',
+    'Brmu':      'Brmu',
+    'jetR':      'jetR',
+    'LambdaDQCD': 'ΛD (GeV)',
+}
+
+# Fallback derived-param expressions and fixed params used when no meta JSON exists
+_DEFAULT_DERIVED = {
+    'mPi':        'mRho * (8.0 / 15.5)',
+    'LambdaDQCD': 'mRho * (5.0 / 15.5)',
+    'rinv_rho':   'rinv_pion',
+}
+_DEFAULT_FIXED = {'mq': 4.0, 'Brmu': 0.3, 'jetR': 1.0}
+
+
+# ── Scan meta loader ──────────────────────────────────────────────────────────
+
+def _load_scan_meta():
+    """Return the scan meta dict from svj_scan_meta.json, or an empty dict."""
+    try:
+        with open(_META_PATH) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _resolve_derived(scan_point, meta):
+    """
+    Given a dict of scan-axis values, return a complete param dict that also
+    includes derived and fixed params from the scan meta.
+    """
+    derived_exprs = meta.get('derived_exprs', _DEFAULT_DERIVED)
+    fixed_params  = meta.get('fixed_params',  _DEFAULT_FIXED)
+    params = dict(fixed_params)
+    params.update(scan_point)
+    for name, expr in derived_exprs.items():
+        try:
+            params[name] = float(eval(expr, {'__builtins__': {}}, dict(params)))
+        except Exception:
+            pass
+    return params
 
 
 # ── Observable list — built from loaded NPZ or DEFAULT_SCAN ──────────────────
@@ -48,10 +112,10 @@ def _build_obs_list():
     """
     Return (base_names, all_names, all_labels, name_to_arr).
 
-    base_names  : list[str]      — observables actually in the loaded NPZ
+    base_names  : list[str]      — observables in the loaded NPZ
     all_names   : list[str]      — base + computable derived observables
-    all_labels  : list[str]      — LaTeX labels for all_names
-    name_to_arr : dict[str→int]  — observable name → position in base_names
+    all_labels  : list[str]      — display labels for all_names
+    name_to_arr : dict[str→int]  — name → position in base_names
     """
     try:
         helpers._build_svj_interp()
@@ -60,11 +124,9 @@ def _build_obs_list():
         base_names = list(DEFAULT_SCAN)
 
     name_to_arr = {n: i for i, n in enumerate(base_names)}
+    all_names   = list(base_names)
+    all_labels  = [OBSERVABLES[n].get('label', n) for n in base_names]
 
-    all_names  = list(base_names)
-    all_labels = [OBSERVABLES[n].get('label', n) for n in base_names]
-
-    # Append derived observables whose components are both in base_names
     for obs_name, spec in OBSERVABLES.items():
         dc = spec.get('derive_cols')
         if dc is None:
@@ -81,16 +143,15 @@ _BASE_OBS, _OBS_NAMES, _OBS_LABELS, _NAME_TO_ARR = _build_obs_list()
 _N_BASE = len(_BASE_OBS)
 _N_OBS  = len(_OBS_NAMES)
 
-# Precompute indices for hemiMass enforcement
-_IDX_MASS1  = _OBS_NAMES.index('hemiMass1')  if 'hemiMass1'  in _OBS_NAMES else None
-_IDX_MASS2  = _OBS_NAMES.index('hemiMass2')  if 'hemiMass2'  in _OBS_NAMES else None
-_IDX_MRAT   = _OBS_NAMES.index('mass2/mass1') if 'mass2/mass1' in _OBS_NAMES else None
+_IDX_MASS1 = _OBS_NAMES.index('hemiMass1')  if 'hemiMass1'  in _OBS_NAMES else None
+_IDX_MASS2 = _OBS_NAMES.index('hemiMass2')  if 'hemiMass2'  in _OBS_NAMES else None
+_IDX_MRAT  = _OBS_NAMES.index('mass2/mass1') if 'mass2/mass1' in _OBS_NAMES else None
 
 
 # ── Config helpers ────────────────────────────────────────────────────────────
 
 def _parse_cfg(path=None):
-    """Return dict of values from the cfg file (Python eval on each value)."""
+    """Return dict of values from a flat key=value cfg file."""
     if path is None:
         path = _DEFAULT_CFG
     result = {}
@@ -112,60 +173,49 @@ def _parse_cfg(path=None):
 
 
 _CFG = _parse_cfg()
-_TRULY_FIXED = [
-    ('mq',  'mq',  '{:.1f} GeV'),
-    ('Brl', 'Brl', '{:.2f}'),
-    ('jetR','jetR','{:.1f}'),
-]
 
 
-def _fixed_params_html(mRho, rinv):
+def _fixed_params_html(scan_point):
+    """Return an HTML string listing the non-scan params for the given point."""
+    meta   = _load_scan_meta()
+    params = _resolve_derived(scan_point, meta)
+    # Show everything that isn't a scan axis
+    non_scan = {k: v for k, v in params.items() if k not in scan_point}
     parts = []
-    for key, label, fmt in _TRULY_FIXED:
-        if key in _CFG:
-            parts.append(f'{label}={fmt.format(_CFG[key])}')
-    parts.append(f'rinv2={rinv:.2f}')
-    parts.append(f'mPi={(8/15.5)*mRho:.2f} GeV')
-    parts.append(f'ΛD={(5/15.5)*mRho:.2f} GeV')
-    return ('<br><span style="color:#777; font-size:0.9em">Fixed: '
+    for k, v in non_scan.items():
+        label = _PARAM_LABELS.get(k, k)
+        if isinstance(v, float):
+            parts.append(f'{label}={v:.4g}')
+        else:
+            parts.append(f'{label}={v}')
+    return ('<br><span style="color:#777; font-size:0.9em">Fixed/derived: '
             + ',  '.join(parts) + '</span>')
 
 
-def _make_validate_cfg(mZ, mRho, rinv, alphaD, n_events=100_000):
-    """Write a cfg block for a validation PYTHIA run."""
-    mq         = _CFG.get('mq',       4.0)
-    Brl        = _CFG.get('Brl',      0.3)
-    jetR       = _CFG.get('jetR',     1.0)
-    nWorkers   = int(_CFG.get('nWorkers', 14))
-    mPi        = (8  / 15.5) * mRho
-    LambdaDQCD = (5  / 15.5) * mRho
-    return (
-        f'mZ         = {mZ}\n'
-        f'mq         = {mq}\n'
-        f'mPi        = {mPi}\n'
-        f'mRho       = {mRho}\n'
-        f'rinv       = {rinv}\n'
-        f'rinv2      = {rinv}\n'
-        f'Brl        = {Brl}\n'
-        f'alphaD     = {alphaD}\n'
-        f'nEvent     = {n_events}\n'
-        f'jetR       = {jetR}\n'
-        f'LambdaDQCD = {LambdaDQCD}\n'
-        f'nWorkers   = {nWorkers}\n'
-        f'save_tsv      = 1\n'
-        f'jets_vis_only = 1\n'
-        f'dijet_only    = 0\n'
-    )
+def _make_validate_cfg(scan_point, n_events=100_000):
+    """Write a complete cfg block for a validation PYTHIA run."""
+    meta   = _load_scan_meta()
+    params = _resolve_derived(scan_point, meta)
+    nWorkers = int(_CFG.get('nWorkers', 14))
+
+    lines = ['# auto-generated validation config']
+    for k, v in params.items():
+        lines.append(f'{k} = {v}')
+    lines += [
+        f'nEvent        = {n_events}',
+        f'nWorkers      = {nWorkers}',
+        'save_tsv      = 1',
+        'jets_vis_only = 1',
+        'dijet_only    = 0',
+    ]
+    return '\n'.join(lines) + '\n'
 
 
 # ── Derived-observable computation ────────────────────────────────────────────
 
 def _add_derived(X):
-    """
-    Append computable derived-observable columns to an (N, n_base) array.
-    The set of derived columns is determined at module load by _NAME_TO_ARR.
-    """
-    eps = 1e-10
+    """Append computable derived columns to an (N, n_base) array."""
+    eps     = 1e-10
     derived = []
     for obs_name, spec in OBSERVABLES.items():
         dc = spec.get('derive_cols')
@@ -184,30 +234,21 @@ def _add_derived(X):
 # ── True-data loader ──────────────────────────────────────────────────────────
 
 def _load_true_data():
-    """
-    Load and extract base + derived observables from
-    data/regression/jets_default.tsv (written by VALIDATE).
-    Returns (N, n_obs_all) array in original physical units.
-
-    No range-check filtering is applied — we display all finite events
-    so the true distribution is unbiased.  The GUI cut sliders let the
-    user restrict the visible range interactively.
-    """
-    data, col_map = load_tsv('data/regression/jets_default.tsv')
+    """Load base + derived observables from simulated/tsv/jets_default.tsv."""
+    data, col_map = load_tsv('simulated/tsv/jets_default.tsv')
     if data.ndim != 2:
         raise ValueError(f"Expected 2-D TSV, got shape {data.shape}.")
-
     X = np.column_stack([data[:, col_map[OBSERVABLES[n]['col']]] for n in _BASE_OBS])
     finite_mask = np.all(np.isfinite(X), axis=1)
     return _add_derived(X[finite_mask])
 
 
-# ── Model sampling (format-agnostic) ─────────────────────────────────────────
+# ── Model sampling ────────────────────────────────────────────────────────────
 
-def _sample_model(mZ, mRho, rinv, alphaD, n_samples, rng):
-    """Draw n_samples from the interpolated SVJ model."""
-    result = helpers.interpolate_svj_params(mZ, mRho, rinv, alphaD)
-    X = helpers.sample_svj_new(*result, n_samples=n_samples, rng=rng)
+def _sample_model(scan_point, n_samples, rng):
+    """Draw n_samples from the interpolated SVJ model at scan_point (dict)."""
+    result = helpers.interpolate_svj_params(scan_point)
+    X      = helpers.sample_svj_new(*result, n_samples=n_samples, rng=rng)
     return _add_derived(X)
 
 
@@ -215,22 +256,21 @@ def _sample_model(mZ, mRho, rinv, alphaD, n_samples, rng):
 
 def _compute_fixed_ranges(n_corner_samples=3_000):
     try:
-        mZ_vals, mRho_vals, rinv_vals, alphaD_vals = helpers.svj_grid_bounds()
+        grid_bounds = helpers.svj_grid_bounds()
     except Exception:
         return [(0.0, 1.0)] * _N_OBS
 
-    rng    = np.random.default_rng(0)
-    chunks = []
-    for mZ_c in [mZ_vals[0], mZ_vals[-1]]:
-        for mRho_c in [mRho_vals[0], mRho_vals[-1]]:
-            for rinv_c in [rinv_vals[0], rinv_vals[-1]]:
-                for alphaD_c in [alphaD_vals[0], alphaD_vals[-1]]:
-                    try:
-                        chunks.append(
-                            _sample_model(mZ_c, mRho_c, rinv_c, alphaD_c,
-                                          n_corner_samples, rng))
-                    except Exception:
-                        pass
+    rng        = np.random.default_rng(0)
+    axis_names = list(grid_bounds.keys())
+    corner_vals = [(grid_bounds[n][0], grid_bounds[n][-1]) for n in axis_names]
+    chunks      = []
+
+    for combo in itertools.product(*corner_vals):
+        scan_point = dict(zip(axis_names, combo))
+        try:
+            chunks.append(_sample_model(scan_point, n_corner_samples, rng))
+        except Exception:
+            pass
 
     if not chunks:
         return [(0.0, 1.0)] * _N_OBS
@@ -255,8 +295,8 @@ def show(n_samples=10_000):
     """
     Launch the two-feature SVJ parameter explorer.
 
-    Select any two observables to view their marginals and 2-D joint
-    distribution while varying the four SVJ physics parameters via sliders.
+    Sliders are built dynamically from the scan axes stored in svj_scan.npz,
+    so the explorer automatically reflects whatever parameters were scanned.
     Press VALIDATE to run a full PYTHIA simulation at the current point and
     overlay the true distributions.
 
@@ -266,16 +306,13 @@ def show(n_samples=10_000):
         Number of model samples to draw per update (default 10 000).
     """
     try:
-        mZ_vals, mRho_vals, rinv_vals, alphaD_vals = helpers.svj_grid_bounds()
+        grid_bounds = helpers.svj_grid_bounds()   # dict[str, np.ndarray]
     except FileNotFoundError as e:
         print(f"Could not load SVJ scan: {e}")
         print("Run scan_svj.py first, then restart the notebook.")
         return
 
-    mZ_min,     mZ_max     = mZ_vals[0],     mZ_vals[-1]
-    mRho_min,   mRho_max   = mRho_vals[0],   mRho_vals[-1]
-    rinv_min,   rinv_max   = rinv_vals[0],   rinv_vals[-1]
-    alphaD_min, alphaD_max = alphaD_vals[0], alphaD_vals[-1]
+    axis_names = list(grid_bounds.keys())
 
     # ── Mutable closure state ─────────────────────────────────────────────────
     _state = {
@@ -287,33 +324,25 @@ def show(n_samples=10_000):
         'ax_joint_true': None,
     }
 
-    # ── Sliders ───────────────────────────────────────────────────────────────
+    # ── Dynamic parameter sliders ─────────────────────────────────────────────
     slider_layout = widgets.Layout(width='520px')
     slider_style  = {'description_width': '110px'}
 
-    w_mZ = widgets.FloatSlider(
-        value=round((mZ_min + mZ_max) / 2 / 50) * 50,
-        min=mZ_min, max=mZ_max, step=50.,
-        description="mZ' (GeV)", continuous_update=False,
-        style=slider_style, layout=slider_layout)
+    sliders = {}
+    for name in axis_names:
+        vals = grid_bounds[name]
+        lo, hi = float(vals[0]), float(vals[-1])
+        step   = _PARAM_STEPS.get(name, round((hi - lo) / 100, 6))
+        label  = _PARAM_LABELS.get(name, name)
+        mid    = round((lo + hi) / 2 / step) * step if step > 0 else (lo + hi) / 2
+        mid    = max(lo, min(hi, mid))
+        sliders[name] = widgets.FloatSlider(
+            value=mid, min=lo, max=hi, step=step,
+            description=label, continuous_update=False,
+            style=slider_style, layout=slider_layout)
 
-    w_mRho = widgets.FloatSlider(
-        value=round((mRho_min + mRho_max) / 2 * 2) / 2,
-        min=mRho_min, max=mRho_max, step=0.5,
-        description='mRho (GeV)', continuous_update=False,
-        style=slider_style, layout=slider_layout)
-
-    w_rinv = widgets.FloatSlider(
-        value=round((rinv_min + rinv_max) / 2, 2),
-        min=rinv_min, max=rinv_max, step=0.01,
-        description='rinv', continuous_update=False,
-        style=slider_style, layout=slider_layout)
-
-    w_alphaD = widgets.FloatSlider(
-        value=round((alphaD_min + alphaD_max) / 2, 2),
-        min=alphaD_min, max=alphaD_max, step=0.01,
-        description='alphaD', continuous_update=False,
-        style=slider_style, layout=slider_layout)
+    def _get_scan_point():
+        return {name: sliders[name].value for name in axis_names}
 
     # ── Feature selectors ─────────────────────────────────────────────────────
     obs_opts = [(name, i) for i, name in enumerate(_OBS_NAMES)]
@@ -353,9 +382,8 @@ def show(n_samples=10_000):
 
     w_info = widgets.HTML(value='')
 
-    _all_widgets = [w_mZ, w_mRho, w_rinv, w_alphaD,
-                    w_xfeat, w_yfeat, w_axes,
-                    w_nsamples, w_nvalidate, w_validate]
+    _all_widgets = (list(sliders.values()) +
+                    [w_xfeat, w_yfeat, w_axes, w_nsamples, w_nvalidate, w_validate])
 
     # ── Cut widgets ───────────────────────────────────────────────────────────
     def _make_cut_slider(i):
@@ -422,7 +450,6 @@ def show(n_samples=10_000):
         ax_xmarg.cla()
         ax_ymarg.cla()
 
-        # Enforce hemiMass1 >= hemiMass2 when either axis is a mass column
         mass_idxs = {i for i in (_IDX_MASS1, _IDX_MASS2, _IDX_MRAT) if i is not None}
         if xi in mass_idxs or yi in mass_idxs:
             if _IDX_MASS1 is not None and _IDX_MASS2 is not None:
@@ -460,7 +487,6 @@ def show(n_samples=10_000):
             if tmask.sum() >= 20:
                 tx, ty = tx_raw[tmask], ty_raw[tmask]
 
-        # Marginals
         b2 = 30
         ax_xmarg.hist(xdata, bins=b2, range=xrng, color='steelblue', alpha=0.85,
                       density=True, histtype='step', linewidth=1.5,
@@ -486,7 +512,6 @@ def show(n_samples=10_000):
             ax_xmarg.legend(fontsize=8, framealpha=0.5)
             ax_ymarg.legend(fontsize=8, framealpha=0.5)
 
-        # Joint
         if _state['joint_mode'] == 'single':
             ax_j = _state['ax_joint']
             ax_j.cla()
@@ -501,9 +526,9 @@ def show(n_samples=10_000):
             ax_true.cla()
             b = 50
             H_est,  _, _ = np.histogram2d(xdata, ydata, bins=b,
-                                          range=[xrng, yrng], density=True)
+                                           range=[xrng, yrng], density=True)
             H_true, _, _ = np.histogram2d(tx,    ty,    bins=b,
-                                          range=[xrng, yrng], density=True)
+                                           range=[xrng, yrng], density=True)
             vmax = max(H_est.max(), H_true.max())
 
             ax_est.hist2d(xdata, ydata, bins=b, range=[xrng, yrng],
@@ -533,17 +558,14 @@ def show(n_samples=10_000):
 
     # ── Update callbacks ──────────────────────────────────────────────────────
     def update(_=None):
-        mZ     = w_mZ.value
-        mRho   = w_mRho.value
-        rinv   = w_rinv.value
-        alphaD = w_alphaD.value
-        xi     = w_xfeat.value
-        yi     = w_yfeat.value
+        scan_point = _get_scan_point()
+        xi        = w_xfeat.value
+        yi        = w_yfeat.value
         use_fixed = (w_axes.value == 'Fixed')
-        n = w_nsamples.value
+        n         = w_nsamples.value
 
         try:
-            X = _sample_model(mZ, mRho, rinv, alphaD, n, _rng)
+            X = _sample_model(scan_point, n, _rng)
         except ValueError as e:
             w_info.value = f'<span style="color:red">Error: {e}</span>'
             return
@@ -552,17 +574,17 @@ def show(n_samples=10_000):
 
         val_note = ''
         if _state['true_data'] is not None:
-            n_true = len(_state['true_data'])
+            n_true   = len(_state['true_data'])
             val_note = (f'<br><span style="color:crimson; font-size:0.9em">'
                         f'▶ Validation: {n_true:,} true events</span>')
 
+        param_str = ',  '.join(
+            f"{_PARAM_LABELS.get(k, k)}={v:.4g}" for k, v in scan_point.items())
         w_info.value = (
             f'<span style="font-weight:bold; color:steelblue">'
-            f'{n:,} samples — '
-            f"mZ'={mZ:.0f} GeV, mRho={mRho:.1f} GeV, "
-            f'rinv={rinv:.2f}, alphaD={alphaD:.2f}'
+            f'{n:,} samples — {param_str}'
             f'</span>'
-            + _fixed_params_html(mRho, rinv)
+            + _fixed_params_html(scan_point)
             + val_note
         )
         _draw(X, xi, yi, use_fixed)
@@ -573,26 +595,24 @@ def show(n_samples=10_000):
 
     # ── Validation thread ─────────────────────────────────────────────────────
     def _on_validate(_b):
-        mZ     = w_mZ.value
-        mRho   = w_mRho.value
-        rinv   = w_rinv.value
-        alphaD = w_alphaD.value
+        scan_point = _get_scan_point()
 
         for w in _all_widgets:
             w.disabled = True
 
-        n_val = w_nvalidate.value
+        n_val     = w_nvalidate.value
+        param_str = ',  '.join(
+            f"{_PARAM_LABELS.get(k, k)}={v:.4g}" for k, v in scan_point.items())
         w_info.value = (
             '<span style="color:#c07000; font-weight:bold">'
-            f'⏳ Running PYTHIA simulation ({n_val:,} events) — '
-            f"mZ'={mZ:.0f}, mRho={mRho:.1f}, rinv={rinv:.2f}, alphaD={alphaD:.2f} …"
+            f'⏳ Running PYTHIA simulation ({n_val:,} events) — {param_str} …'
             '</span>'
         )
 
         def _thread():
             tmp_path = None
             try:
-                cfg_text = _make_validate_cfg(mZ, mRho, rinv, alphaD, n_val)
+                cfg_text = _make_validate_cfg(scan_point, n_val)
                 with tempfile.NamedTemporaryFile(
                         mode='w', suffix='.cfg', dir='.', delete=False) as f:
                     f.write(cfg_text)
@@ -609,22 +629,21 @@ def show(n_samples=10_000):
                 true_data = _load_true_data()
                 _state['true_data'] = true_data
 
-                n = w_nsamples.value
-                n_true = len(true_data)
+                n       = w_nsamples.value
+                n_true  = len(true_data)
                 w_info.value = (
                     f'<span style="font-weight:bold; color:steelblue">'
-                    f'{n:,} samples — '
-                    f"mZ'={mZ:.0f} GeV, mRho={mRho:.1f} GeV, "
-                    f'rinv={rinv:.2f}, alphaD={alphaD:.2f}'
+                    f'{n:,} samples — {param_str}'
                     f'</span>'
-                    + _fixed_params_html(mRho, rinv)
+                    + _fixed_params_html(scan_point)
                     + f'<br><span style="color:crimson; font-size:0.9em">'
                       f'▶ Validation: {n_true:,} true events</span>'
                 )
 
                 X = _state['model_samples']
                 if X is not None:
-                    _draw(X, w_xfeat.value, w_yfeat.value, w_axes.value == 'Fixed')
+                    _draw(X, w_xfeat.value, w_yfeat.value,
+                          w_axes.value == 'Fixed')
 
             except Exception as e:
                 w_info.value = f'<span style="color:red">Validation error: {e}</span>'
@@ -637,7 +656,7 @@ def show(n_samples=10_000):
         threading.Thread(target=_thread, daemon=True).start()
 
     # ── Wire up observers ─────────────────────────────────────────────────────
-    for w in [w_mZ, w_mRho, w_rinv, w_alphaD]:
+    for w in sliders.values():
         w.observe(update_clear, names='value')
     for w in [w_xfeat, w_yfeat, w_axes, w_nsamples]:
         w.observe(update, names='value')
@@ -658,14 +677,14 @@ def show(n_samples=10_000):
     w_reset_cuts.on_click(_on_reset_cuts)
 
     # ── Layout ────────────────────────────────────────────────────────────────
-    left_panel = widgets.VBox([
-        w_mZ, w_mRho, w_rinv, w_alphaD,
-        widgets.HBox([w_xfeat, w_yfeat, w_axes, w_validate],
-                     layout=widgets.Layout(margin='8px 0px')),
-        widgets.HBox([w_nsamples, w_nvalidate],
-                     layout=widgets.Layout(margin='0px 0px 8px 0px')),
-        w_info,
-    ])
+    left_panel = widgets.VBox(
+        list(sliders.values()) + [
+            widgets.HBox([w_xfeat, w_yfeat, w_axes, w_validate],
+                         layout=widgets.Layout(margin='8px 0px')),
+            widgets.HBox([w_nsamples, w_nvalidate],
+                         layout=widgets.Layout(margin='0px 0px 8px 0px')),
+            w_info,
+        ])
 
     cut_panel = widgets.VBox(
         [widgets.HTML(

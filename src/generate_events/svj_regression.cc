@@ -75,9 +75,9 @@ static double mZ        = 2000.0;
 static double mq        =    4.0;
 static double mPi       =    8.0;
 static double mRho      =   15.5;
-static double rinv      =    0.3;
-static double rinv2     =    0.3;
-static double Brl       =    0.3;
+static double rinv_pion  =    0.3;   // dark pion invisible BR
+static double rinv_rho   =    0.3;   // dark rho invisible BR
+static double Brmu      =    0.3;   // dark rho → mu+mu- BR fraction (of visible decays)
 static double alphaD    =    0.4;
 static int    nEvent    = 100000;
 static double jetR      =    1.0;
@@ -87,8 +87,8 @@ static int    saveTSV   =    1;   // write raw TSV; set to 0 during scan
 static int    jetsVisOnly = 1;    // 1 = store visible jet 4-momenta in jets_kinematics.tsv; 0 = full jet (incl. invisible)
 static int    dijetOnly  =  0;   // 1 = only keep events with >= 2 jets (dijet topology)
 static double visJetPtMin = 20.0; // min visible pT (GeV) for a jet to be kept
-static std::string tsvFile    = "data/regression/jets_default.tsv";
-static std::string tsvKinFile = "data/regression/jets_kinematics.tsv";
+static std::string tsvFile    = "simulated/tsv/jets_default.tsv";
+static std::string tsvKinFile = "simulated/tsv/jets_kinematics.tsv";
 
 static void rs(Pythia& p, const std::string& key, double val) {
   std::ostringstream oss;
@@ -153,8 +153,8 @@ static bool setupPythia(Pythia& pythia, int seed) {
 
   {
     std::ostringstream vis, inv;
-    vis << 1. - rinv;
-    inv << rinv;
+    vis << 1. - rinv_pion;
+    inv << rinv_pion;
     pythia.readString("4900111:oneChannel = 1 " + inv.str() + " 0 51 -51");
     pythia.readString("4900111:addChannel = 1 " + vis.str() + " 91 4 -4");
     pythia.readString("4900211:oneChannel = 1 " + inv.str() + " 0 51 -51");
@@ -163,14 +163,14 @@ static bool setupPythia(Pythia& pythia, int seed) {
     pythia.readString("-4900211:addChannel = 1 " + vis.str() + " 91 4 -4");
   }
   {
-    // Brl is the fraction of the VISIBLE dark-rho decays going to mu+mu-.
-    // lep_br  = Brl * (1 - rinv2)  → mu+mu-
-    // bott_br = (1 - Brl) * (1 - rinv2)  → bb-bar
-    // These always sum to (1 - rinv2), together with rinv2 giving total = 1.
-    double lep_br  = Brl * (1.0 - rinv2);
-    double bott_br = (1.0 - Brl) * (1.0 - rinv2);
+    // Brmu is the fraction of the VISIBLE dark-rho decays going to mu+mu-.
+    // lep_br  = Brmu * (1 - rinv_rho)  → mu+mu-
+    // bott_br = (1 - Brmu) * (1 - rinv_rho)  → bb-bar
+    // These always sum to (1 - rinv_rho), together with rinv_rho giving total = 1.
+    double lep_br  = Brmu * (1.0 - rinv_rho);
+    double bott_br = (1.0 - Brmu) * (1.0 - rinv_rho);
     std::ostringstream lep, bott, inv2;
-    inv2 << rinv2;
+    inv2 << rinv_rho;
     bott << bott_br;
     lep  << lep_br;
 
@@ -710,9 +710,9 @@ int main(int argc, char* argv[]) {
   mq         = cfgDouble(cfg, "mq",         mq);
   mPi        = cfgDouble(cfg, "mPi",        mPi);
   mRho       = cfgDouble(cfg, "mRho",       mRho);
-  rinv       = cfgDouble(cfg, "rinv",       rinv);
-  rinv2      = cfgDouble(cfg, "rinv2",      rinv2);
-  Brl        = cfgDouble(cfg, "Brl",        Brl);
+  rinv_pion  = cfgDouble(cfg, "rinv_pion",  rinv_pion);
+  rinv_rho   = cfgDouble(cfg, "rinv_rho",   rinv_rho);
+  Brmu       = cfgDouble(cfg, "Brmu",       Brmu);
   alphaD     = cfgDouble(cfg, "alphaD",     alphaD);
   nEvent     = cfgInt   (cfg, "nEvent",     nEvent);
   jetR       = cfgDouble(cfg, "jetR",       jetR);
@@ -725,9 +725,9 @@ int main(int argc, char* argv[]) {
   tsvFile     = cfgStr  (cfg, "tsv_file",      tsvFile);
   tsvKinFile  = cfgStr  (cfg, "tsv_kin_file",  tsvKinFile);
 
-  if (rinv2 < 0.0 || rinv2 >= 1.0 || Brl < 0.0 || Brl > 1.0) {
-    std::cerr << "Error: rinv2=" << rinv2 << " Brl=" << Brl
-              << " — require 0 <= rinv2 < 1 and 0 <= Brl <= 1\n";
+  if (rinv_rho < 0.0 || rinv_rho >= 1.0 || Brmu < 0.0 || Brmu > 1.0) {
+    std::cerr << "Error: rinv_rho=" << rinv_rho << " Brmu=" << Brmu
+              << " — require 0 <= rinv_rho < 1 and 0 <= Brmu <= 1\n";
     return 1;
   }
 

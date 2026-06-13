@@ -1,10 +1,10 @@
 # mySVJ — SVJ Interpolation Framework
 
 Semi-Visible Jet (SVJ) parameter-space interpolation using PYTHIA8 + FastJet.
-The framework scans a 4-D parameter grid, fits a per-observable transform pipeline
-+ Multivariate-t copula at each point, and provides fast interpolation so that
-the joint observable distribution can be sampled at any parameter point without
-re-running PYTHIA.
+The framework scans an arbitrary subset of SVJ physics parameters (configured via
+an INI-style config file), fits a per-observable transform pipeline + Multivariate-t
+copula at each grid point, and provides fast interpolation so that the joint
+observable distribution can be sampled at any parameter point without re-running PYTHIA.
 
 ---
 
@@ -92,8 +92,8 @@ and writes the binary to `src/generate_events/svj_regression`.
 src/generate_events/svj_regression src/generate_events/svj_regression.cfg
 ```
 
-A successful run writes `data/regression/jets_default.tsv` (~50 000 events).
-Both output directories are created automatically.
+A successful run writes `simulated/tsv/jets_default.tsv` (~50 000 events).
+The output directory is created automatically.
 
 ---
 
@@ -120,10 +120,10 @@ mySVJ/
 │   ├── svj_explorer.py
 │   ├── gui.ipynb
 │   └── simulated/{v1,gennorm}/   Copies of the v1 NPZ files
-├── simulated/
-│   ├── svj/svj_scan.npz           Output of scan_svj.py  (new format; created on first scan run)
-│   └── v1/regression_scan.npz    V1 archived data (gennorm + MVN copula, 12 obs)
-└── data/regression/               TSV files written by the event generator
+└── simulated/
+    ├── svj/svj_scan.npz           Output of scan_svj.py  (new format; created on first scan run)
+    ├── tsv/jets_default.tsv       TSV output of single binary run (created on first run)
+    └── v1/regression_scan.npz    V1 archived data (gennorm + MVN copula, 12 obs)
 ```
 
 ---
@@ -143,45 +143,58 @@ cd ../..
 All scan parameters live in `src/run_regression/scan_regression.cfg`.
 Edit this file before running.
 
-**Grid axes** — these define the 4-D hypercube that will be scanned:
+The config uses **INI-style sections**.  Every physics parameter must appear in
+exactly one of three zones:
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `mZ_min`, `mZ_max`, `mZ_n` | 500, 4000, 8 | Z′ mass range (GeV) and number of grid points |
-| `mRho_min`, `mRho_max`, `mRho_n` | 10, 30, 8 | Dark rho mass range (GeV) |
-| `rinv_min`, `rinv_max`, `rinv_n` | 0.05, 0.70, 8 | Dark pion invisible BR |
-| `alphaD_min`, `alphaD_max`, `alphaD_n` | 0.10, 0.80, 8 | Dark coupling α_D |
+```ini
+[scan]
+# axes of the N-D grid; format: name = min, max, n[, spacing]
+# spacing = linear (default) or log
+mZ        = 500, 4000, 8
+mRho      = 10, 30, 8
+rinv_pion = 0.05, 0.70, 8
+alphaD    = 0.10, 0.80, 8
 
-**Fixed physics parameters** (same at every grid point):
+[fixed]
+# constant at every grid point
+mq   = 4.0
+Brmu = 0.3
+jetR = 1.0
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `mq` | 4.0 | Dark quark mass (GeV) |
-| `Brl` | 0.3 | Fraction of *visible* dark-rho decays going to μ⁺μ⁻; `lep_br = Brl*(1−rinv2)` |
-| `jetR` | 1.0 | Anti-kT jet radius |
-| `nEvent` | 50000 | Events per grid point |
-| `nWorkers` | 1 | Internal C++ threads per grid point (keep 1 when outer parallelism is used) |
+[derived]
+# arithmetic expressions evaluated from scan+fixed values at each point
+# Only +, -, *, / and parentheses are allowed (no imports or builtins)
+mPi        = mRho * (8.0 / 15.5)
+LambdaDQCD = mRho * (5.0 / 15.5)
+rinv_rho   = rinv_pion              # tie dark-rho BR to dark-pion BR
 
-**Derived parameters** (computed automatically, not set here):
+[simulation]
+nEvent           = 50000   # events per grid point
+nWorkers         = 1       # C++ threads per point (keep 1 with outer parallelism)
+n_outer_workers  = 48      # simultaneous grid points (ProcessPoolExecutor)
+checkpoint_every = 200     # save NPZ every N completions
+output_dir       = simulated
+```
 
-| Parameter | Formula | Notes |
-|-----------|---------|-------|
-| `mPi` | `mRho × 8/15.5` | Dark pion mass |
-| `LambdaDQCD` | `mRho × 5/15.5` | Dark QCD confinement scale |
-| `rinv2` | `= rinv` | Dark rho invisible BR (tied to dark pion invisible BR in v2 scan; see note) |
+**To change which parameters are scanned** — move them between sections:
+- Move a param from `[fixed]` or `[derived]` into `[scan]` to add a scan axis.
+- Move a param from `[scan]` into `[fixed]` to hold it constant.
+- Move a param from `[fixed]` into `[derived]` to tie it to another parameter
+  (e.g. `rinv_rho = rinv_pion` makes them always equal without scanning both).
+- Any number of scan axes is supported (1-D, 2-D, 5-D, …).
 
-> **Note on `rinv2`**: The current scan ties the dark-rho invisible BR to the dark-pion invisible BR
-> (`rinv2 = rinv`).  This is a deliberate model choice recorded in
-> `scan_regression.cfg`.  The C++ generator uses the new BR parameterisation where
-> `Brl` is the *fraction of the visible* decays that go to leptons, so
-> `lep_br = Brl*(1−rinv2)` and `bott_br = (1−Brl)*(1−rinv2)` always sum to 1.
+> **Note on `rinv_pion` / `rinv_rho`**: The C++ binary uses separate keys
+> `rinv_pion` (dark pion invisible BR) and `rinv_rho` (dark rho invisible BR).
+> In the default scan these are tied via `rinv_rho = rinv_pion` in `[derived]`;
+> move `rinv_rho` to `[scan]` to scan them independently.  The BR decomposition
+> is `lep_br = Brmu*(1−rinv_rho)`, `bott_br = (1−Brmu)*(1−rinv_rho)`,
+> `inv_br = rinv_rho`; together they sum to 1.
 
-**Parallelisation parameters** (`scan_svj.py` only):
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `n_outer_workers` | 48 | Simultaneous grid points (Python `ProcessPoolExecutor`) |
-| `checkpoint_every` | 200 | Save intermediate NPZ every N completions |
+**Log-spacing**: append `, log` to a `[scan]` entry to use `np.logspace` instead
+of `np.linspace`:
+```ini
+mZ = 500, 4000, 8, log
+```
 
 ### 1.3 Run the scan — standard (no raw saving)
 
@@ -423,7 +436,7 @@ A summary line reports how many events passed the range checks.
 ```python
 from src.diagnostics import plot_observable_transforms
 
-figs = plot_observable_transforms('data/regression/jets_default.tsv')
+figs = plot_observable_transforms('simulated/tsv/jets_default.tsv')
 ```
 
 This uses `DEFAULT_SCAN` and shows all 12 default observables.
@@ -454,7 +467,7 @@ Returns a list of `matplotlib.Figure` objects (one per observable).
 
 ```python
 from src.diagnostics import show_observable_transforms
-show_observable_transforms('data/regression/jets_default.tsv', obs='leadVisPt,MET,tau1')
+show_observable_transforms('simulated/tsv/jets_default.tsv', obs='leadVisPt,MET,tau1')
 ```
 
 ### 3.4 Workflow: generate a test TSV first
@@ -464,7 +477,7 @@ The diagnostics require a TSV file (raw PYTHIA output).  Generate one with:
 ```bash
 # From the project root:
 src/generate_events/svj_regression src/generate_events/svj_regression.cfg
-# writes data/regression/jets_default.tsv
+# writes simulated/tsv/jets_default.tsv
 ```
 
 All physics parameters for this run are in `src/generate_events/svj_regression.cfg`:
@@ -475,9 +488,9 @@ All physics parameters for this run are in `src/generate_events/svj_regression.c
 | `mq` | 4.0 | Dark quark mass (GeV) |
 | `mPi` | 7.742 | Dark pion mass (GeV) — update manually if mRho changes |
 | `mRho` | 15.0 | Dark rho mass (GeV) |
-| `rinv` | 0.45 | Dark pion invisible BR |
-| `rinv2` | 0.70 | Dark rho invisible BR |
-| `Brl` | 0.3 | Fraction of visible dark-rho decays → μ⁺μ⁻ |
+| `rinv_pion` | 0.45 | Dark pion invisible BR |
+| `rinv_rho` | 0.70 | Dark rho invisible BR |
+| `Brmu` | 0.3 | Fraction of visible dark-rho decays → μ⁺μ⁻ |
 | `alphaD` | 0.1 | Dark coupling α_D |
 | `nEvent` | 50000 | Number of events |
 | `jetR` | 1.0 | Anti-kT jet radius |
@@ -511,10 +524,7 @@ The GUI loads `simulated/svj/svj_scan.npz` automatically.
 
 | Control | Description |
 |---------|-------------|
-| **mZ′ slider** | Z′ mass in GeV (grid range) |
-| **mRho slider** | Dark rho mass in GeV (grid range) |
-| **rinv slider** | Dark pion invisible BR (grid range) |
-| **alphaD slider** | Dark coupling α_D (grid range) |
+| **Parameter sliders** | One slider per scan axis, built dynamically from the loaded NPZ — adding or removing axes in `scan_regression.cfg` automatically updates the GUI |
 | **Feature X / Y dropdowns** | Choose any two observables for the joint plot |
 | **Fixed / Auto toggle** | Fixed axes use percentile-1/99 ranges from grid corners; Auto rescales to the current sample |
 | **N model** | Number of model samples drawn from the interpolated distribution |
@@ -550,18 +560,23 @@ Once a scan NPZ is present, `src/helpers.py` provides:
 import sys; sys.path.insert(0, 'src')
 import helpers
 
-# Get grid bounds
-mZ_vals, mRho_vals, rinv_vals, alphaD_vals = helpers.svj_grid_bounds()
+# Get grid bounds: dict {axis_name: vals_array} for each scan axis
+grid_bounds = helpers.svj_grid_bounds()
+# e.g. {'mZ': array([500,...,4000]), 'mRho': array([10,...,30]), ...}
 
-# Interpolate fitted parameters at any (mZ, mRho, rinv, alphaD) inside the grid
+# Interpolate fitted parameters at any point inside the grid
+# Pass a dict with a value for each scan axis
 R_upper, nu, obs_params, param_offsets, obs_names = helpers.interpolate_svj_params(
-    mZ=1500, mRho=20, rinv=0.3, alphaD=0.4)
+    {'mZ': 1500, 'mRho': 20, 'rinv_pion': 0.3, 'alphaD': 0.4})
 
 # Sample from the interpolated distribution
 X = helpers.sample_svj_new(R_upper, nu, obs_params, param_offsets, obs_names,
                             n_samples=50_000)
 # X has shape (n_samples, n_obs) in original physical units
 ```
+
+The dict keys must match the scan axis names stored in the NPZ (i.e. whatever was
+in `[scan]` when the scan was run).  Extra keys are ignored.
 
 ---
 
@@ -590,17 +605,25 @@ from the saved NPZ.
 
 ### New format (`simulated/svj/svj_scan.npz`)
 
+The number and names of scan axes are dynamic (set by `[scan]` in the config).
+The example below shows the default 4-axis scan.
+
 | Key | Shape | Description |
 |-----|-------|-------------|
-| `param_flat` | `(N_mZ, N_mRho, N_rinv, N_alphaD, total_params)` | All fitted parameters, flat |
+| `axis_names` | `(K,)` | Names of the K scan axes (e.g. `['mZ','mRho','rinv_pion','alphaD']`) |
+| `{name}_vals` | `(N_k,)` | Grid values for each axis (one array per axis name) |
+| `param_flat` | `(N_0, …, N_{K-1}, total_params)` | All fitted parameters, flat over the K-D grid |
 | `param_offsets` | `(n_obs+1,)` | `param_flat[..., offsets[i]:offsets[i+1]]` = params for obs i |
-| `corr_start` | scalar int | `param_flat[..., corr_start:corr_start+n_corr]` = MVT correlation upper-triangle |
+| `corr_start` | scalar int | `param_flat[..., corr_start:corr_start+n_corr]` = MVT corr upper-triangle |
 | `nu_idx` | scalar int | `param_flat[..., nu_idx]` = MVT degrees of freedom ν |
 | `obs_names` | `(n_obs,)` | Observable names in regression order |
-| `scan_params` | `(N_mZ, N_mRho, N_rinv, N_alphaD, 6)` | `[mZ, mRho, mPi, LambdaQCD, rinv, alphaD]` per point |
-| `mZ_vals`, `mRho_vals`, `rinv_vals`, `alphaD_vals` | 1-D | Grid axis values |
+| `scan_params` | `(N_0, …, N_{K-1}, n_phys)` | All resolved physics params (scan + derived) per point |
+| `scan_param_names` | `(n_phys,)` | Names for the `scan_params` columns |
 
 `total_params = param_offsets[-1] + n_corr + 1` where `n_corr = n_obs*(n_obs-1)//2`.
+
+The companion `svj_scan_meta.json` stores `scan_axes`, `fixed_params`, and
+`derived_exprs` so that downstream tools can reconstruct any parameter value.
 
 ### V1 format (`simulated/v1/regression_scan.npz`)
 
