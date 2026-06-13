@@ -164,15 +164,15 @@ static bool setupPythia(Pythia& pythia, int seed) {
   }
   {
     // Brmu is the fraction of the VISIBLE dark-rho decays going to mu+mu-.
-    // lep_br  = Brmu * (1 - rinv_rho)  → mu+mu-
-    // bott_br = (1 - Brmu) * (1 - rinv_rho)  → bb-bar
+    // rho_mu_br   = Brmu * (1 - rinv_rho)  → mu+mu-
+    // rho_bott_br = (1 - Brmu) * (1 - rinv_rho)  → bb-bar
     // These always sum to (1 - rinv_rho), together with rinv_rho giving total = 1.
-    double lep_br  = Brmu * (1.0 - rinv_rho);
-    double bott_br = (1.0 - Brmu) * (1.0 - rinv_rho);
+    double rho_mu_br   = Brmu * (1.0 - rinv_rho);
+    double rho_bott_br = (1.0 - Brmu) * (1.0 - rinv_rho);
     std::ostringstream lep, bott, inv2;
     inv2 << rinv_rho;
-    bott << bott_br;
-    lep  << lep_br;
+    bott << rho_bott_br;
+    lep  << rho_mu_br;
 
     pythia.readString("4900113:onMode = off");
     pythia.readString("4900213:onMode = off");

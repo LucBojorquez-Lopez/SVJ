@@ -1,6 +1,6 @@
 # mySVJ — SVJ Interpolation Framework
 
-Semi-Visible Jet (SVJ) parameter-space interpolation using PYTHIA8 + FastJet.
+Semi-Visible Jet (SVJ) parameter-space exploration using PYTHIA8 + FastJet.
 The framework scans an arbitrary subset of SVJ physics parameters (configured via
 an INI-style config file), fits a per-observable transform pipeline + Multivariate-t
 copula at each grid point, and provides fast interpolation so that the joint
@@ -71,7 +71,36 @@ pip install numpy "scipy>=1.6" matplotlib ipywidgets ipympl jupyterlab
 `scipy ≥ 1.6` is required for `scipy.stats.multivariate_t`.
 `ipympl` enables the `%matplotlib widget` backend used by the Jupyter GUI.
 
-### 0.6 Build the event generator
+### 0.6 Create the Makefile
+
+The `Makefile` is **not tracked in git** (it is listed in `.gitignore`) because it
+contains paths that are local to each machine.  Create it at the repository root:
+
+```bash
+# From mySVJ/ root:
+cat > Makefile << 'EOF'
+PYTHIA_DIR  = ../pythia8317
+FASTJET_DIR = ../fastjet3
+-include $(PYTHIA_DIR)/examples/Makefile.inc
+
+CXX_COMMON += -std=c++17 -pthread
+
+CXX_COMMON := $(OBJ_COMMON) -I$(PYTHIA_DIR)/include $(CXX_COMMON) $(GZIP_LIB)
+CXX_COMMON += -L$(PYTHIA_DIR)/lib -Wl,-rpath,$(PYTHIA_DIR)/lib -lpythia8 -ldl
+CXX_COMMON += $(shell $(FASTJET_DIR)/bin/fastjet-config --cxxflags --libs)
+
+src/generate_events/svj_regression: src/generate_events/svj_regression.cc
+	$(CXX) $< -o $@ $(CXX_COMMON)
+
+.PHONY: svj_regression
+svj_regression: src/generate_events/svj_regression
+EOF
+```
+
+Adjust `PYTHIA_DIR` and `FASTJET_DIR` if your installations live elsewhere.
+The indented recipe line above uses a **tab** character — `cat << 'EOF'` preserves it.
+
+### 0.7 Build the event generator
 
 ```bash
 # From the mySVJ/ root:
@@ -81,11 +110,11 @@ make svj_regression
 This compiles `src/generate_events/svj_regression.cc` against PYTHIA8 and FastJet
 and writes the binary to `src/generate_events/svj_regression`.
 
-> **Important**: A pre-compiled binary is tracked in git, but it has absolute library
-> paths baked in from the original build machine.  Always re-run `make svj_regression`
-> after a fresh clone before trying to run or scan.
+> **Note**: A pre-compiled binary is tracked in git for convenience, but it has
+> absolute library paths baked in from the original build machine.  Always
+> re-run `make svj_regression` after a fresh clone before trying to run or scan.
 
-### 0.7 Verify the build
+### 0.8 Verify the build
 
 ```bash
 # From the mySVJ/ root (the binary resolves ../pythia8317 relative to here):
@@ -187,7 +216,7 @@ output_dir       = simulated
 > `rinv_pion` (dark pion invisible BR) and `rinv_rho` (dark rho invisible BR).
 > In the default scan these are tied via `rinv_rho = rinv_pion` in `[derived]`;
 > move `rinv_rho` to `[scan]` to scan them independently.  The BR decomposition
-> is `lep_br = Brmu*(1−rinv_rho)`, `bott_br = (1−Brmu)*(1−rinv_rho)`,
+> is `rho_mu_br = Brmu*(1−rinv_rho)`, `rho_bott_br = (1−Brmu)*(1−rinv_rho)`,
 > `inv_br = rinv_rho`; together they sum to 1.
 
 **Log-spacing**: append `, log` to a `[scan]` entry to use `np.logspace` instead
@@ -486,15 +515,15 @@ All physics parameters for this run are in `src/generate_events/svj_regression.c
 |-----|---------|-------------|
 | `mZ` | 1000.0 | Z′ mass (GeV) |
 | `mq` | 4.0 | Dark quark mass (GeV) |
-| `mPi` | 7.742 | Dark pion mass (GeV) — update manually if mRho changes |
+| `mPi` | 7.742 | Dark pion mass (GeV) |
 | `mRho` | 15.0 | Dark rho mass (GeV) |
 | `rinv_pion` | 0.45 | Dark pion invisible BR |
 | `rinv_rho` | 0.70 | Dark rho invisible BR |
-| `Brmu` | 0.3 | Fraction of visible dark-rho decays → μ⁺μ⁻ |
+| `Brmu` | 0.3 | Fraction of VISIBLE dark-rho decays that go to → μ⁺μ⁻ |
 | `alphaD` | 0.1 | Dark coupling α_D |
 | `nEvent` | 50000 | Number of events |
 | `jetR` | 1.0 | Anti-kT jet radius |
-| `LambdaDQCD` | 4.839 | Dark QCD scale (GeV) — update if mRho changes |
+| `LambdaDQCD` | 4.839 | Dark QCD scale (GeV) |
 | `nWorkers` | 14 | Parallel C++ threads |
 | `save_tsv` | 1 | Write `jets_default.tsv` (set 0 to skip) |
 | `vis_jet_pt_min` | 100.0 | Minimum visible jet pT threshold (GeV) |
