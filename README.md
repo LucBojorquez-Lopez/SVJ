@@ -1,8 +1,8 @@
 # SVJ Interpolation Framework
 
-Much of the existing work on Hidden Valley (HV) phenomenology constrains physics by picking a few event or jet observables, varying one or two HV parameters while holding others fixed at "reasonable" benchmark values. With an infinite-dimensional HV parameter space, constraints derived at benchmark points offer no guarantee of representativeness away from those benchmarks — and nothing ensures that separate studies, conducted at different benchmarks, are mutually consistent.
+Much of the existing work on Hidden Valley (HV) phenomenology constrains physics by picking a few event or jet observables, varying one or two HV parameters while holding others fixed at "reasonable" benchmark values. With an infinite-dimensional HV parameter space, constraints derived at benchmark points offer no guarantee of representativeness away from those benchmarks. Perhaps more importantly, nothing ensures that separate studies, conducted at different benchmarks, are mutually consistent.
 
-This framework enables fast, interactive exploration of the full HV parameter space. The user has full control over which parameters to scan, which observables to define, how to transform and fit each observable's marginal distribution, and how to apply cuts. An interactive GUI exposes physics sliders so that the joint observable distribution can be explored dynamically, with cuts applied in real time — since observable cuts are central to these analyses.
+This framework enables fast, interactive exploration of the full HV parameter space. The user has full control over which parameters to scan, which observables to define, how to transform and fit each observable's marginal distribution, and how to apply cuts. An interactive GUI exposes physics sliders so that the joint observable distribution can be explored dynamically, with cuts applied in real time, since observable cuts are central to these analyses.
 
 We hope this flexibility in characterizing the HV parameter space at truth-level contributes to a more coherent and unified approach to Hidden Valley phenomenology.
 
