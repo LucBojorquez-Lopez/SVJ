@@ -115,4 +115,5 @@ Full reference documentation is in [`docs/`](docs/):
 | Interactive GUI | [docs/gui.md](docs/gui.md) |
 | Interpolation API | [docs/api.md](docs/api.md) |
 | NPZ file formats | [docs/npz-format.md](docs/npz-format.md) |
+| Validation | [docs/validation.md](docs/validation.md) |
 | Old version (v1) | [docs/old-version.md](docs/old-version.md) |
