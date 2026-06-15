@@ -2,3 +2,6 @@ Makefile
 *.ipynb
 src/generate_events/svj_regression
 logs/
+__pycache__/
+*.py[cod]
+.pytest_cache/
