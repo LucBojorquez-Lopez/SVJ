@@ -693,8 +693,16 @@ def main():
             avg     = elapsed / done
             h, rem  = divmod(int(avg * (n_todo - done)), 3600)
             mm, s   = divmod(rem, 60)
-            disc_str = (f"  disc={int(n_disc.sum())}"
-                        if ok and n_disc is not None else "")
+            if ok and n_disc is not None:
+                total_disc = int(n_disc.sum())
+                per_obs = ", ".join(
+                    f"{name}:{int(n)}"
+                    for name, n in zip(obs_selection, n_disc)
+                    if n > 0
+                )
+                disc_str = f"  disc={total_disc}" + (f" [{per_obs}]" if per_obs else "")
+            else:
+                disc_str = ""
             print(f"[{done:{width}}/{n_todo}]  {gidx}"
                   f"  {'ok  ' if ok else 'FAIL'}"
                   f"  ETA {h:02d}:{mm:02d}:{s:02d}"
