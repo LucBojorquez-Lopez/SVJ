@@ -1,0 +1,93 @@
+=== job 24121747  array task 1  started Mon Jun 22 16:33:28 EDT 2026 ===
+    node:   holy7c18207
+    cpus:   48
+    python: Python 3.12.11
+
+Warning: existing NPZ shape (3, 2, 2, 2, 115) != current (3, 6, 3, 4, 115). Starting fresh.
+SVJ scan  job 1/3  (48 outer × 1 C++ threads)
+  Axes (4): mZ(3), rinv_pion(6), mRho(3), alphaD(4)
+  Grid:       3×6×3×4 = 216 total  (54 this job)
+  Observables (12): ['leadVisPt', 'leadWidth', 'MET', 'maxMuPt', 'jetThrust', 'hemiMass1', 'hemiMass2', 'e2c', 'e3c', 'tau1', 'tau2', 'tau3']
+  Total params/point: 115  (obs: 48, corr: 66, nu: 1)
+  To do:      54  (already done: 0)
+  Events/pt:  500
+  Output:     simulated/svj/svj_scan_1.npz
+
+[ 1/54]  (2, 2, 1, 1)  FAIL  ETA 00:10:28
+[ 2/54]  (2, 0, 2, 1)  FAIL  ETA 00:05:08
+[ 3/54]  (1, 2, 2, 1)  FAIL  ETA 00:03:21
+[ 4/54]  (0, 4, 2, 1)  FAIL  ETA 00:02:28
+[ 5/54]  (1, 4, 1, 1)  FAIL  ETA 00:01:56
+[ 6/54]  (1, 5, 2, 1)  ok    ETA 00:01:35  disc=3
+[ 7/54]  (2, 3, 2, 1)  ok    ETA 00:01:20  disc=3
+[ 8/54]  (1, 1, 2, 1)  FAIL  ETA 00:01:09
+[ 9/54]  (2, 3, 0, 1)  FAIL  ETA 00:01:00
+[10/54]  (0, 3, 2, 1)  FAIL  ETA 00:00:53
+[11/54]  (1, 3, 1, 1)  FAIL  ETA 00:00:47
+[12/54]  (2, 1, 1, 1)  FAIL  ETA 00:00:42
+[13/54]  (0, 5, 1, 1)  FAIL  ETA 00:00:38
+[14/54]  (1, 4, 2, 1)  FAIL  ETA 00:00:34
+[15/54]  (2, 1, 2, 1)  FAIL  ETA 00:00:31
+[16/54]  (1, 3, 2, 1)  FAIL  ETA 00:00:29
+[17/54]  (1, 5, 1, 1)  FAIL  ETA 00:00:26
+[18/54]  (0, 5, 2, 1)  FAIL  ETA 00:00:24
+[19/54]  (2, 3, 1, 1)  FAIL  ETA 00:00:22
+[20/54]  (1, 4, 0, 1)  FAIL  ETA 00:00:20
+[21/54]  (1, 0, 2, 1)  FAIL  ETA 00:00:19
+[22/54]  (2, 0, 1, 1)  FAIL  ETA 00:00:17
+[23/54]  (0, 2, 2, 1)  FAIL  ETA 00:00:16
+[24/54]  (0, 4, 1, 1)  FAIL  ETA 00:00:15
+[25/54]  (2, 2, 0, 1)  FAIL  ETA 00:00:14
+[26/54]  (1, 5, 0, 1)  ok    ETA 00:00:13  disc=1
+[27/54]  (2, 2, 2, 1)  ok    ETA 00:00:12  disc=4
+[28/54]  (1, 2, 1, 1)  ok    ETA 00:00:11  disc=0
+[29/54]  (0, 1, 0, 1)  ok    ETA 00:00:11  disc=53
+[30/54]  (1, 1, 0, 1)  FAIL  ETA 00:00:10
+[31/54]  (0, 0, 1, 1)  FAIL  ETA 00:00:09
+[32/54]  (0, 0, 0, 1)  ok    ETA 00:00:09  disc=31
+[33/54]  (1, 3, 0, 1)  FAIL  ETA 00:00:08
+[34/54]  (0, 3, 0, 1)  ok    ETA 00:00:07  disc=7
+[35/54]  (0, 1, 2, 1)  FAIL  ETA 00:00:07
+[36/54]  (0, 3, 1, 1)  FAIL  ETA 00:00:06
+[37/54]  (0, 1, 1, 1)  ok    ETA 00:00:06  disc=7
+[38/54]  (0, 5, 0, 1)  FAIL  ETA 00:00:05
+[39/54]  (0, 2, 0, 1)  ok    ETA 00:00:05  disc=8
+[40/54]  (2, 1, 0, 1)  FAIL  ETA 00:00:04
+[41/54]  (1, 0, 1, 1)  FAIL  ETA 00:00:04
+[42/54]  (0, 2, 1, 1)  FAIL  ETA 00:00:03
+[43/54]  (0, 0, 2, 1)  FAIL  ETA 00:00:03
+[44/54]  (1, 2, 0, 1)  FAIL  ETA 00:00:03
+[45/54]  (2, 0, 0, 1)  FAIL  ETA 00:00:02
+[46/54]  (1, 0, 0, 1)  ok    ETA 00:00:02  disc=8
+[47/54]  (1, 1, 1, 1)  ok    ETA 00:00:02  disc=1
+[48/54]  (0, 4, 0, 1)  ok    ETA 00:00:01  disc=1
+[49/54]  (2, 5, 2, 1)  ok    ETA 00:00:01  disc=55
+[50/54]  (2, 5, 1, 1)  ok    ETA 00:00:01  disc=48
+[51/54]  (2, 5, 0, 1)  ok    ETA 00:00:01  disc=28
+[52/54]  (2, 4, 1, 1)  ok    ETA 00:00:00  disc=11
+[53/54]  (2, 4, 2, 1)  ok    ETA 00:00:00  disc=17
+[54/54]  (2, 4, 0, 1)  FAIL  ETA 00:00:00
+
+Done. 54 points in 2.6 min; 36 failed.
+Saved → simulated/svj/svj_scan_1.npz
+  param_flat: (3, 6, 3, 4, 115)
+  WARNING: 198 grid points have NaN.
+
+=== Resource usage (scan) ===
+  Python main process peak RSS :     100 MB
+  C++ binary peak RSS (max)    :     159 MB  (1 thread(s)/point, 54 measurements)
+  n_outer_workers (concurrent) : 48
+  Estimated concurrent peak    :    7733 MB  (48 × 159 + 100)
+  → suggested --mem            : 12G  (concurrent estimate × 1.5)
+=============================
+
+=== Resource usage: svj_scan task 1 ===
+  Peak RSS (Python main)  : 159.0 MB
+  Wall time               : 3:01.32
+  CPU cores alloc         : 48
+  CPU efficiency          : 20.0%
+  → suggest --mem         : 1G
+  (C++ worker RSS is in the scan_svj.py output above)
+=================================
+
+=== job 24121747  array task 1  finished Mon Jun 22 16:36:29 EDT 2026 ===

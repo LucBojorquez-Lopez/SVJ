@@ -1,0 +1,2 @@
+/n/home06/lbojorquezlopez/PYTHIAplaythings/SVJ/src/observables.py:533: UserWarning: loadtxt: input contained no data: "/tmp/svj_scan_414.tsv"
+  data = np.loadtxt(path, comments='#')
