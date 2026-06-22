@@ -352,9 +352,13 @@ def _worker(args):
         fail = (grid_indices, None, None, None, None, None, cpp_peak_kb)
 
         if proc.returncode != 0:
+            print(f"[FAIL rc={proc.returncode}] {grid_indices}\n"
+                  f"  stdout: {proc.stdout[-500:].strip()!r}\n"
+                  f"  stderr: {proc.stderr[-200:].strip()!r}", flush=True)
             return fail
 
         if not os.path.exists(temp_tsv):
+            print(f"[FAIL no-tsv] {grid_indices}", flush=True)
             return fail
 
         try:

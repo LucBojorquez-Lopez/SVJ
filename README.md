@@ -116,4 +116,5 @@ Full reference documentation is in [`docs/`](docs/):
 | Interpolation API | [docs/api.md](docs/api.md) |
 | NPZ file formats | [docs/npz-format.md](docs/npz-format.md) |
 | Validation | [docs/validation.md](docs/validation.md) |
+| Running the unit tests | [docs/testing.md](docs/testing.md) |
 | Old version (v1) | [docs/old-version.md](docs/old-version.md) |
