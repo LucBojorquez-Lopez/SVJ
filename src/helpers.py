@@ -370,10 +370,10 @@ def interpolate_svj_params(params):
     -------
     (R_upper, nu, flat_obs_params, param_offsets, obs_names)
 
-    R_upper         : np.ndarray, shape (K*(K-1)//2,)
+    R_upper         : np.ndarray, shape (n_obs*(n_obs-1)//2,)
     nu              : float
     flat_obs_params : np.ndarray
-    param_offsets   : np.ndarray, shape (K+1,)
+    param_offsets   : np.ndarray, shape (n_obs+1,)
     obs_names       : list of str
     """
     _build_svj_interp()

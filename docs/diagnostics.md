@@ -34,7 +34,7 @@ All physics parameters for this run are in `src/generate_events/svj_regression.c
 | `LambdaDQCD` | 4.839 | Dark QCD scale (GeV) |
 | `nWorkers` | 14 | Parallel C++ threads |
 | `save_tsv` | 1 | Write `jets_default.tsv` (set 0 to skip) |
-| `vis_jet_pt_min` | 100.0 | Minimum visible jet pT threshold (GeV) |
+| `vis_jet_pt_min` | 20.0 | Minimum visible jet pT threshold (GeV) |
 
 > `mPi` and `LambdaDQCD` in this file are hardcoded floats. If you change
 > `mRho`, update them manually: `mPi = 8/15.5 * mRho`, `LambdaDQCD = 5/15.5 * mRho`.

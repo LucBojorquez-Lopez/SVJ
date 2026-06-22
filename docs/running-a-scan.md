@@ -42,8 +42,9 @@ output_dir       = simulated
 - Move a param from `[fixed]` or `[derived]` into `[scan]` to add a scan axis.
 - Move a param from `[scan]` into `[fixed]` to hold it constant.
 - Move a param from `[fixed]` into `[derived]` to tie it to another parameter
-  (e.g. `rinv_rho = rinv_pion` makes them always equal without scanning both.
-  NOTE: Derived parameters can only be written in terms of scanning parameters, not fixed ones).
+  (e.g. `rinv_rho = rinv_pion` makes them always equal without scanning both).
+  Derived expressions may reference scan params, fixed params, or other derived params —
+  all are available at evaluation time.
 - Any number of scan axes is supported (1-D, 2-D, 5-D, …).
 
 > **Note on `rinv_pion` / `rinv_rho`**: The C++ binary uses separate keys
@@ -93,7 +94,7 @@ python src/run_regression/scan_svj.py src/run_regression/scan_regression.cfg \
 Additional output: `simulated/svj/svj_scan_raw.npz`
 ```
 raw_flat       shape (total_events, n_obs)   — pre-transform values
-raw_grid_flat  shape (total_events, 4)        — grid indices [i,j,k,l]
+raw_grid_flat  shape (total_events, K)        — grid indices per axis (K = number of scan axes)
 ```
 
 > **Storage estimate**: with `nEvent=2000` and 12 observables over a 8⁴ grid,

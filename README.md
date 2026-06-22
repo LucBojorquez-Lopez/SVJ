@@ -52,7 +52,7 @@ import sys; sys.path.insert(0, 'src')
 import helpers
 
 R_upper, nu, obs_params, param_offsets, obs_names = helpers.interpolate_svj_params(
-    {'mZ': 1500, 'mRho': 20, 'rinv_pion': 0.3, 'alphaD': 0.4})
+    {'mZ': 1500, 'jetR': 0.6, 'rinv_pion': 0.3, 'Brmu': 0.3})
 
 X = helpers.sample_svj_new(R_upper, nu, obs_params, param_offsets, obs_names,
                             n_samples=50_000)
