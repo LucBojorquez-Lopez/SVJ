@@ -352,13 +352,9 @@ def _worker(args):
         fail = (grid_indices, None, None, None, None, None, cpp_peak_kb)
 
         if proc.returncode != 0:
-            print(f"[FAIL rc={proc.returncode}] {grid_indices}\n"
-                  f"  stdout: {proc.stdout[-500:].strip()!r}\n"
-                  f"  stderr: {proc.stderr[-200:].strip()!r}", flush=True)
             return fail
 
         if not os.path.exists(temp_tsv):
-            print(f"[FAIL no-tsv] {grid_indices}", flush=True)
             return fail
 
         try:
@@ -624,8 +620,8 @@ def main():
                        for k in range(len(axis_names))}
         point_params = resolve_point(scan_point, scan_cfg.fixed_params,
                                      scan_cfg.derived_exprs)
-        # task_id for unique /tmp filenames
-        task_id = sum(gidx[k] * (total // axis_sizes[k]) for k in range(len(axis_sizes)))
+        # flat_idx is unique across all grid points — use it directly for /tmp filenames
+        task_id = flat_idx
         tasks.append((task_id, gidx, point_params,
                       nEvent, nWorkers_inn, obs_selection, save_raw))
 
