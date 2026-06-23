@@ -375,7 +375,6 @@ def show(n_samples=10_000):
         'ax_joint':      None,
         'ax_joint_est':  None,
         'ax_joint_true': None,
-        'colorbar':      None,
     }
 
     # ── Dynamic parameter sliders ─────────────────────────────────────────────
@@ -466,33 +465,31 @@ def show(n_samples=10_000):
     # ── Figure ────────────────────────────────────────────────────────────────
     fig = plt.figure(figsize=(12, 8))
     fig.canvas.header_visible = False
-    gs  = gridspec.GridSpec(2, 2, figure=fig, hspace=0.45, wspace=0.35)
+    gs  = gridspec.GridSpec(2, 3, figure=fig,
+                            width_ratios=[1, 1, 0.06],
+                            hspace=0.45, wspace=0.35)
     ax_xmarg = fig.add_subplot(gs[0, 0])
     ax_ymarg = fig.add_subplot(gs[0, 1])
-    _state['ax_joint'] = fig.add_subplot(gs[1, :])
+    # gs[0, 2] is intentionally left empty — aligns with the colorbar column below
+    _state['ax_joint'] = fig.add_subplot(gs[1, :2])
+    ax_cbar = fig.add_subplot(gs[1, 2])
 
     _rng = np.random.default_rng()
 
     # ── Joint-axis layout management ──────────────────────────────────────────
     def _ensure_joint_layout(want_split):
         if want_split and _state['joint_mode'] == 'single':
-            if _state['colorbar'] is not None:
-                _state['colorbar'].remove()
-                _state['colorbar'] = None
             _state['ax_joint'].remove()
             _state['ax_joint']      = None
             _state['ax_joint_est']  = fig.add_subplot(gs[1, 0])
             _state['ax_joint_true'] = fig.add_subplot(gs[1, 1])
             _state['joint_mode']    = 'split'
         elif not want_split and _state['joint_mode'] == 'split':
-            if _state['colorbar'] is not None:
-                _state['colorbar'].remove()
-                _state['colorbar'] = None
             _state['ax_joint_est'].remove()
             _state['ax_joint_true'].remove()
             _state['ax_joint_est']  = None
             _state['ax_joint_true'] = None
-            _state['ax_joint']      = fig.add_subplot(gs[1, :])
+            _state['ax_joint']      = fig.add_subplot(gs[1, :2])
             _state['joint_mode']    = 'single'
 
     # ── Cut mask ──────────────────────────────────────────────────────────────
@@ -578,9 +575,6 @@ def show(n_samples=10_000):
         use_log = (w_norm.value == 'Log')
         if _state['joint_mode'] == 'single':
             ax_j = _state['ax_joint']
-            if _state['colorbar'] is not None:
-                _state['colorbar'].remove()
-                _state['colorbar'] = None
             ax_j.cla()
             H, xe, ye = np.histogram2d(xdata, ydata, bins=80,
                                         range=[xrng, yrng], density=True)
@@ -589,15 +583,13 @@ def show(n_samples=10_000):
             norm = LogNorm(vmin=float(pos.min()) if len(pos) else 1e-10,
                            vmax=float(H.max())) if use_log else None
             pcm  = ax_j.pcolormesh(xe, ye, H_masked.T, cmap='viridis', norm=norm)
-            _state['colorbar'] = fig.colorbar(pcm, ax=ax_j, label='Density')
+            ax_cbar.cla()
+            fig.colorbar(pcm, cax=ax_cbar, label='Density')
             ax_j.set_xlabel(xlbl, fontsize=10)
             ax_j.set_ylabel(ylbl, fontsize=10)
         else:
             ax_est  = _state['ax_joint_est']
             ax_true = _state['ax_joint_true']
-            if _state['colorbar'] is not None:
-                _state['colorbar'].remove()
-                _state['colorbar'] = None
             ax_est.cla()
             ax_true.cla()
             b = 50
@@ -625,9 +617,8 @@ def show(n_samples=10_000):
             ax_true.set_xlabel(xlbl, fontsize=10)
             ax_true.set_ylabel(ylbl, fontsize=10)
             ax_true.set_title('True (Simulated)', fontsize=10)
-            _state['colorbar'] = fig.colorbar(
-                pcm_true, ax=[ax_est, ax_true],
-                orientation='horizontal', pad=0.08, label='Density')
+            ax_cbar.cla()
+            fig.colorbar(pcm_true, cax=ax_cbar, label='Density')
 
         any_cut = any(
             w_cuts[i].value[0] > _FIXED_RANGES[i][0] or
