@@ -29,6 +29,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import ipywidgets as widgets
+from matplotlib.colors import LogNorm, Normalize
 from IPython.display import display
 import subprocess
 import tempfile
@@ -243,6 +244,33 @@ def _add_derived(X):
     return X
 
 
+# ── Histogram with multinomial error band ────────────────────────────────────
+
+def _plot_hist_with_band(ax, data, bins, range_, color,
+                         alpha_line=0.85, alpha_band=0.2, label=None):
+    """
+    Draw a density step histogram with a ±1σ multinomial error band.
+
+    σ_density = sqrt(p_i * (1 - p_i) / N) / Δbin_i,  p_i = count_i / N.
+    The band is rendered as a fill_between in step form, clipped below at 0.
+    """
+    counts, edges = np.histogram(data, bins=bins, range=range_)
+    N       = max(len(data), 1)
+    widths  = np.diff(edges)
+    density = counts / (N * widths)
+    p       = counts / N
+    err     = np.sqrt(np.maximum(p * (1.0 - p), 0.0) / N) / widths
+
+    ax.hist(data, bins=edges, range=range_, color=color, alpha=alpha_line,
+            density=True, histtype='step', linewidth=1.5, label=label)
+
+    # Build step-form x/y arrays so fill_between matches the histogram outline.
+    x_step = np.concatenate([[edges[0]], np.repeat(edges[1:-1], 2), [edges[-1]]])
+    y_lo   = np.repeat(np.maximum(density - err, 0.0), 2)
+    y_hi   = np.repeat(density + err, 2)
+    ax.fill_between(x_step, y_lo, y_hi, color=color, alpha=alpha_band, linewidth=0)
+
+
 # ── True-data loader ──────────────────────────────────────────────────────────
 
 def _load_true_data():
@@ -317,6 +345,19 @@ def show(n_samples=10_000):
     n_samples : int
         Number of model samples to draw per update (default 10 000).
     """
+    plt.rcParams.update({
+        'font.family':     'serif',
+        'font.serif':      ['Times New Roman', 'DejaVu Serif'],
+        'axes.grid':       True,
+        'grid.alpha':      0.3,
+        'grid.linewidth':  0.5,
+        'axes.axisbelow':  True,
+        'axes.labelsize':  11,
+        'xtick.labelsize': 9,
+        'ytick.labelsize': 9,
+        'legend.fontsize': 9,
+    })
+
     try:
         grid_bounds = helpers.svj_grid_bounds()   # dict[str, np.ndarray]
     except FileNotFoundError as e:
@@ -334,6 +375,7 @@ def show(n_samples=10_000):
         'ax_joint':      None,
         'ax_joint_est':  None,
         'ax_joint_true': None,
+        'colorbar':      None,
     }
 
     # ── Dynamic parameter sliders ─────────────────────────────────────────────
@@ -374,6 +416,11 @@ def show(n_samples=10_000):
         description='Axes:',
         style={'description_width': '50px', 'button_width': '80px'})
 
+    w_norm = widgets.ToggleButtons(
+        options=['Linear', 'Log'], value='Linear',
+        description='Color scale:',
+        style={'description_width': '80px', 'button_width': '70px'})
+
     # ── Sample-count inputs ───────────────────────────────────────────────────
     int_style  = {'description_width': '90px'}
     int_layout = widgets.Layout(width='220px')
@@ -395,7 +442,7 @@ def show(n_samples=10_000):
     w_info = widgets.HTML(value='')
 
     _all_widgets = (list(sliders.values()) +
-                    [w_xfeat, w_yfeat, w_axes, w_nsamples, w_nvalidate, w_validate])
+                    [w_xfeat, w_yfeat, w_axes, w_norm, w_nsamples, w_nvalidate, w_validate])
 
     # ── Cut widgets ───────────────────────────────────────────────────────────
     def _make_cut_slider(i):
@@ -429,12 +476,18 @@ def show(n_samples=10_000):
     # ── Joint-axis layout management ──────────────────────────────────────────
     def _ensure_joint_layout(want_split):
         if want_split and _state['joint_mode'] == 'single':
+            if _state['colorbar'] is not None:
+                _state['colorbar'].remove()
+                _state['colorbar'] = None
             _state['ax_joint'].remove()
             _state['ax_joint']      = None
             _state['ax_joint_est']  = fig.add_subplot(gs[1, 0])
             _state['ax_joint_true'] = fig.add_subplot(gs[1, 1])
             _state['joint_mode']    = 'split'
         elif not want_split and _state['joint_mode'] == 'split':
+            if _state['colorbar'] is not None:
+                _state['colorbar'].remove()
+                _state['colorbar'] = None
             _state['ax_joint_est'].remove()
             _state['ax_joint_true'].remove()
             _state['ax_joint_est']  = None
@@ -500,59 +553,80 @@ def show(n_samples=10_000):
                 tx, ty = tx_raw[tmask], ty_raw[tmask]
 
         b2 = 30
-        ax_xmarg.hist(xdata, bins=b2, range=xrng, color='steelblue', alpha=0.85,
-                      density=True, histtype='step', linewidth=1.5,
-                      label='model' if tx is not None else None)
+        _plot_hist_with_band(ax_xmarg, xdata, bins=b2, range_=xrng, color='steelblue',
+                             label='Model' if tx is not None else None)
         ax_xmarg.set_xlabel(xlbl, fontsize=10)
-        ax_xmarg.set_ylabel('density', fontsize=9)
+        ax_xmarg.set_ylabel('Density', fontsize=9)
         if use_fixed:
             ax_xmarg.set_xlim(xrng)
 
-        ax_ymarg.hist(ydata, bins=b2, range=yrng, color='darkorange', alpha=0.85,
-                      density=True, histtype='step', linewidth=1.5,
-                      label='model' if ty is not None else None)
+        _plot_hist_with_band(ax_ymarg, ydata, bins=b2, range_=yrng, color='darkorange',
+                             label='Model' if ty is not None else None)
         ax_ymarg.set_xlabel(ylbl, fontsize=10)
-        ax_ymarg.set_ylabel('density', fontsize=9)
+        ax_ymarg.set_ylabel('Density', fontsize=9)
         if use_fixed:
             ax_ymarg.set_xlim(yrng)
 
         if tx is not None:
-            ax_xmarg.hist(tx, bins=b2, range=xrng, color='crimson', alpha=0.85,
-                          density=True, histtype='step', linewidth=1.5, label='true')
-            ax_ymarg.hist(ty, bins=b2, range=yrng, color='crimson', alpha=0.85,
-                          density=True, histtype='step', linewidth=1.5, label='true')
-            ax_xmarg.legend(fontsize=8, framealpha=0.5)
-            ax_ymarg.legend(fontsize=8, framealpha=0.5)
+            _plot_hist_with_band(ax_xmarg, tx, bins=b2, range_=xrng,
+                                 color='crimson', label='True')
+            _plot_hist_with_band(ax_ymarg, ty, bins=b2, range_=yrng,
+                                 color='crimson', label='True')
+            ax_xmarg.legend(framealpha=0.5)
+            ax_ymarg.legend(framealpha=0.5)
 
+        use_log = (w_norm.value == 'Log')
         if _state['joint_mode'] == 'single':
             ax_j = _state['ax_joint']
+            if _state['colorbar'] is not None:
+                _state['colorbar'].remove()
+                _state['colorbar'] = None
             ax_j.cla()
-            ax_j.hist2d(xdata, ydata, bins=80, range=[xrng, yrng],
-                        cmap='viridis', density=True)
+            H, xe, ye = np.histogram2d(xdata, ydata, bins=80,
+                                        range=[xrng, yrng], density=True)
+            H_masked = np.ma.masked_where(H == 0, H)
+            pos  = H[H > 0]
+            norm = LogNorm(vmin=float(pos.min()) if len(pos) else 1e-10,
+                           vmax=float(H.max())) if use_log else None
+            pcm  = ax_j.pcolormesh(xe, ye, H_masked.T, cmap='viridis', norm=norm)
+            _state['colorbar'] = fig.colorbar(pcm, ax=ax_j, label='Density')
             ax_j.set_xlabel(xlbl, fontsize=10)
             ax_j.set_ylabel(ylbl, fontsize=10)
         else:
             ax_est  = _state['ax_joint_est']
             ax_true = _state['ax_joint_true']
+            if _state['colorbar'] is not None:
+                _state['colorbar'].remove()
+                _state['colorbar'] = None
             ax_est.cla()
             ax_true.cla()
             b = 50
-            H_est,  _, _ = np.histogram2d(xdata, ydata, bins=b,
-                                           range=[xrng, yrng], density=True)
-            H_true, _, _ = np.histogram2d(tx,    ty,    bins=b,
-                                           range=[xrng, yrng], density=True)
-            vmax = max(H_est.max(), H_true.max())
-
-            ax_est.hist2d(xdata, ydata, bins=b, range=[xrng, yrng],
-                          cmap='viridis', density=True, vmin=0, vmax=vmax)
+            H_est,  xe, ye = np.histogram2d(xdata, ydata, bins=b,
+                                             range=[xrng, yrng], density=True)
+            H_true, _,  _  = np.histogram2d(tx,    ty,    bins=b,
+                                             range=[xrng, yrng], density=True)
+            H_est  = np.ma.masked_where(H_est  == 0, H_est)
+            H_true = np.ma.masked_where(H_true == 0, H_true)
+            all_pos = np.concatenate(
+                [H_est.compressed(), H_true.compressed()])
+            all_pos = all_pos[all_pos > 0]
+            if use_log:
+                norm = LogNorm(
+                    vmin=float(all_pos.min()) if len(all_pos) else 1e-10,
+                    vmax=float(all_pos.max()) if len(all_pos) else 1.0)
+            else:
+                vmax = max(float(H_est.max()), float(H_true.max()))
+                norm = Normalize(vmin=0, vmax=vmax)
+            pcm_est  = ax_est.pcolormesh(xe, ye, H_est.T,  cmap='viridis', norm=norm)
+            pcm_true = ax_true.pcolormesh(xe, ye, H_true.T, cmap='viridis', norm=norm)
             ax_est.set_xlabel(xlbl, fontsize=10)
             ax_est.set_ylabel(ylbl, fontsize=10)
             ax_est.set_title('Estimated', fontsize=10)
-            ax_true.hist2d(tx, ty, bins=b, range=[xrng, yrng],
-                           cmap='viridis', density=True, vmin=0, vmax=vmax)
             ax_true.set_xlabel(xlbl, fontsize=10)
             ax_true.set_ylabel(ylbl, fontsize=10)
-            ax_true.set_title('True (simulated)', fontsize=10)
+            ax_true.set_title('True (Simulated)', fontsize=10)
+            _state['colorbar'] = fig.colorbar(
+                pcm_true, ax=[ax_est, ax_true], label='Density')
 
         any_cut = any(
             w_cuts[i].value[0] > _FIXED_RANGES[i][0] or
@@ -670,7 +744,7 @@ def show(n_samples=10_000):
     # ── Wire up observers ─────────────────────────────────────────────────────
     for w in sliders.values():
         w.observe(update_clear, names='value')
-    for w in [w_xfeat, w_yfeat, w_axes, w_nsamples]:
+    for w in [w_xfeat, w_yfeat, w_axes, w_norm, w_nsamples]:
         w.observe(update, names='value')
     w_validate.on_click(_on_validate)
 
@@ -691,7 +765,7 @@ def show(n_samples=10_000):
     # ── Layout ────────────────────────────────────────────────────────────────
     left_panel = widgets.VBox(
         list(sliders.values()) + [
-            widgets.HBox([w_xfeat, w_yfeat, w_axes, w_validate],
+            widgets.HBox([w_xfeat, w_yfeat, w_axes, w_norm, w_validate],
                          layout=widgets.Layout(margin='8px 0px')),
             widgets.HBox([w_nsamples, w_nvalidate],
                          layout=widgets.Layout(margin='0px 0px 8px 0px')),
