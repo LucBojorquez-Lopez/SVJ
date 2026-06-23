@@ -626,7 +626,8 @@ def show(n_samples=10_000):
             ax_true.set_ylabel(ylbl, fontsize=10)
             ax_true.set_title('True (Simulated)', fontsize=10)
             _state['colorbar'] = fig.colorbar(
-                pcm_true, ax=ax_true, label='Density')
+                pcm_true, ax=[ax_est, ax_true],
+                orientation='horizontal', pad=0.08, label='Density')
 
         any_cut = any(
             w_cuts[i].value[0] > _FIXED_RANGES[i][0] or
