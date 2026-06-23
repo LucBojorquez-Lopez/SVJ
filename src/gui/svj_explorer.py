@@ -30,7 +30,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import ipywidgets as widgets
 from matplotlib.colors import LogNorm, Normalize
-from IPython.display import display
+from IPython.display import display, HTML
 import subprocess
 import tempfile
 import threading
@@ -345,6 +345,17 @@ def show(n_samples=10_000):
     n_samples : int
         Number of model samples to draw per update (default 10 000).
     """
+    display(HTML("""
+    <style>
+    .widget-label, .widget-readout,
+    .widget-button, .widget-toggle-buttons button,
+    .widget-dropdown select, .widget-html-content,
+    input[type=number] {
+        font-family: 'Times New Roman', Times, serif !important;
+    }
+    </style>
+    """))
+
     plt.rcParams.update({
         'font.family':     'serif',
         'font.serif':      ['Times New Roman', 'DejaVu Serif'],
