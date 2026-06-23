@@ -69,8 +69,17 @@ class TestObservablesRegistry:
                 f"'{name}' default_include is not bool")
 
     def test_default_scan_matches_flag(self):
-        flagged = {n for n, s in OBSERVABLES.items() if s['default_include']}
+        # DEFAULT_SCAN = non-derived observables where default_include is True.
+        flagged = {n for n, s in OBSERVABLES.items()
+                   if s['default_include'] and s['col'] is not None}
         assert set(DEFAULT_SCAN) == flagged
+
+    def test_default_scan_no_derived_observables(self):
+        # Derived observables (col=None) must never appear in DEFAULT_SCAN,
+        # even if their default_include is True (it controls GUI inclusion only).
+        for name in DEFAULT_SCAN:
+            assert OBSERVABLES[name]['col'] is not None, (
+                f"Derived observable '{name}' (col=None) must not appear in DEFAULT_SCAN")
 
     def test_default_scan_all_regressionable(self):
         for name in DEFAULT_SCAN:

@@ -93,7 +93,13 @@ OBSERVABLES['obsA/obsB'] = {
 }
 ```
 
-To include a new observable in the default regression scan, set
+For derived observables, `default_include` controls **GUI visibility only** —
+derived observables are never part of the regression scan regardless of this
+flag.  Set `'default_include': True` to show the ratio in the explorer
+dropdowns and cut-slider panel by default; leave it `False` to hide it (it will
+not appear unless you edit `observables.py` and re-run the explorer).
+
+To include a **base** observable in the default regression scan, set
 `'default_include': True`, or add its name to `DEFAULT_SCAN` at the bottom of
 `observables.py`. Then re-run `scan_svj.py`.
 

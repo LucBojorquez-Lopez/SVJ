@@ -310,7 +310,7 @@ OBSERVABLES = {
         'col':             'hemiMass2',
         'pipeline':        [('boxcox', {})],
         'distribution':    'gennorm',
-        'default_include': True,
+        'default_include': False,
         'label':           r'Hemi-mass 2 (GeV)',
         'desc':            'Smaller invariant mass of the two event hemispheres.',
     },
@@ -499,7 +499,8 @@ OBSERVABLES = {
 # Default set of observables used in the regression scan.
 # Edit this list (or set default_include=True in the dict above) to change what
 # gets regressed.  Every name here must have pipeline != None.
-DEFAULT_SCAN = [name for name, spec in OBSERVABLES.items() if spec['default_include']]
+DEFAULT_SCAN = [name for name, spec in OBSERVABLES.items()
+                if spec['default_include'] and spec['col'] is not None]
 
 
 # ══════════════════════════════════════════════════════════════════════════════

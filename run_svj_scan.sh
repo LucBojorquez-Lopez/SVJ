@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=svj_scan
-#SBATCH --array=0-3                   # 4 parallel slices; must match N_JOBS below
+#SBATCH --array=0-15                   # 4 parallel slices; must match N_JOBS below
 #SBATCH --nodes=1
-#SBATCH -c 48
+#SBATCH -c 16
 #SBATCH -p arguelles_delgado
-#SBATCH --mem=16G
+#SBATCH --mem=5G
 #SBATCH -t 0-10:00
 #SBATCH --output=logs/svj_%A_%a.out
 #SBATCH --error=logs/svj_%A_%a.err
@@ -65,7 +65,7 @@ echo "    python: $(python --version)"
 echo ""
 
 # Number of array tasks — must match --array=0-(N_JOBS-1) above.
-N_JOBS=4
+N_JOBS=16
 
 TIME_FILE="/tmp/svj_scan_time_${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}.txt"
 

@@ -20,7 +20,7 @@
 #SBATCH --job-name=svj_tsv
 #SBATCH --array=0-3                   # N_JOBS shards; must match N_JOBS below
 #SBATCH --nodes=1
-#SBATCH -c 48                         # CPUs per task; should match nWorkers in svj_regression.cfg
+#SBATCH -c 16                         # CPUs per task; should match nWorkers in svj_regression.cfg
 #SBATCH -p arguelles_delgado
 #SBATCH --mem=1G
 #SBATCH -t 0-02:00                    # wall time; adjust to ~2× single-run time

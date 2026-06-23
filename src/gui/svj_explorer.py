@@ -139,6 +139,8 @@ def _build_obs_list():
         dc = spec.get('derive_cols')
         if dc is None:
             continue
+        if not spec['default_include']:
+            continue
         num_name, den_name = dc
         if num_name in name_to_arr and den_name in name_to_arr:
             all_names.append(obs_name)
@@ -228,6 +230,8 @@ def _add_derived(X):
     for obs_name, spec in OBSERVABLES.items():
         dc = spec.get('derive_cols')
         if dc is None:
+            continue
+        if not spec['default_include']:
             continue
         num_name, den_name = dc
         if num_name in _NAME_TO_ARR and den_name in _NAME_TO_ARR:
