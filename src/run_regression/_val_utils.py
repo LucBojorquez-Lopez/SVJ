@@ -213,8 +213,9 @@ def run_pythia(full_params, n_events, seed_offset, task_tag):
     """
     from observables import load_tsv
 
-    cfg_path = f'/tmp/val_{task_tag}.cfg'
-    tsv_path = f'/tmp/val_{task_tag}.tsv'
+    _uid = os.environ.get('SLURM_ARRAY_TASK_ID') or str(os.getpid())
+    cfg_path = f'/tmp/val_{_uid}_{task_tag}.cfg'
+    tsv_path = f'/tmp/val_{_uid}_{task_tag}.tsv'
 
     try:
         with open(cfg_path, 'w') as fh:
