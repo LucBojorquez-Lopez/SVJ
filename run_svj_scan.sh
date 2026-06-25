@@ -4,8 +4,8 @@
 #SBATCH --nodes=1
 #SBATCH -c 16
 #SBATCH -p arguelles_delgado
-#SBATCH --mem=5G
-#SBATCH -t 0-10:00
+#SBATCH --mem=3G
+#SBATCH -t 0-5:00
 #SBATCH --output=logs/svj_%A_%a.out
 #SBATCH --error=logs/svj_%A_%a.err
 #SBATCH --mail-type=END,FAIL
