@@ -1,7 +1,7 @@
 # Running the unit tests
 
 The test suite lives in `tests/` and covers the pure-Python analysis code
-(observable registry, transforms, MVT fitting, interpolation helpers, and
+(observable registry, transforms, Gaussian copula fitting, interpolation helpers, and
 validation utilities). No PYTHIA binary or pre-built NPZ is required.
 
 ## Dependencies
@@ -45,7 +45,7 @@ pytest tests/test_observables.py -v -k "test_forward_inverse_roundtrip"
 | `test_transforms.py` | `TRANSFORMS` registry: forward, inverse, `n_fitted`, `requires` |
 | `test_observables.py` | `OBSERVABLES`/`DISTRIBUTIONS` registry integrity; `fit_observable_col`, `event_valid_mask`, forward/inverse roundtrip, `load_tsv` |
 | `test_helpers.py` | `BoxCox`, `get_common_finite`, `preprocess_data`, `exp_terms`, `kld_params`, `sample_svj_new` |
-| `test_scan_svj.py` | Config parsing (`read_scan_cfg`, `resolve_point`), MVT EM fitter (`fit_mvt_em`, `_mvt_loglik`) |
+| `test_scan_svj.py` | Config parsing (`read_scan_cfg`, `resolve_point`), Gaussian copula fitter (`fit_mvn_corr`) |
 | `test_val_utils.py` | `resolve_point`, `sample_interior_points`, `js_per_obs`, `mmd_rbf`, `extract_obs_cols` |
 
 ## CI behaviour

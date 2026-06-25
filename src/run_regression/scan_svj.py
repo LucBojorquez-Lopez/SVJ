@@ -3,7 +3,7 @@
 scan_svj.py
 ===========
 Scan an arbitrary subset of SVJ physics parameters, fitting a per-observable
-transform pipeline + Multivariate-t copula at each grid point.
+transform pipeline + Gaussian (MVN) copula at each grid point.
 
 Which parameters are scanned, fixed, or derived is fully controlled by the
 [scan] / [fixed] / [derived] sections of scan_regression.cfg — no code
@@ -15,10 +15,10 @@ At each grid point the pipeline is:
      selected observables; discard events failing any check.
   3. For each observable: apply invertible transforms, fit the chosen
      distribution, map to standard-normal (probit of CDF).
-  4. Fit a zero-mean Multivariate-t (MVT) correlation matrix R and
-     degrees-of-freedom ν to the standard-normal columns via EM.
-  5. Store: per-observable transform+dist params in a flat vector, upper
-     triangle of R, and ν.
+  4. Fit a Gaussian copula correlation matrix R to the standard-normal
+     columns (sample Pearson correlation).
+  5. Store: per-observable transform+dist params in a flat vector and the
+     upper triangle of R.
 
 Observable selection comes from src/observables.py DEFAULT_SCAN.  Override
 via --obs on the command line (comma-separated list of observable names).
@@ -29,7 +29,6 @@ NPZ format (svj_scan.npz):
   param_flat       (N_0,...,N_{K-1}, total_params)
   param_offsets    (n_obs + 1,)        index into param_flat per observable
   corr_start       scalar int          start of R upper-triangle in param_flat
-  nu_idx           scalar int          index of ν in param_flat
   obs_names        (n_obs,)
   scan_params      (N_0,...,N_{K-1}, n_scan_phys)   all resolved physics params per point
   scan_param_names (n_scan_phys,)
@@ -56,8 +55,6 @@ import json
 import itertools
 import configparser
 import numpy as np
-import scipy.special as sp
-import scipy.stats as st
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -181,20 +178,11 @@ def resolve_point(scan_point: dict, fixed: dict, derived_exprs: dict) -> dict:
     return params
 
 
-# ── MVT EM fitter ──────────────────────────────────────────────────────────────
+# ── Gaussian copula fitter ─────────────────────────────────────────────────────
 
-def _mvt_loglik(X, R_inv, log_det_R, nu):
-    N, K = X.shape
-    deltas = np.sum((X @ R_inv) * X, axis=1)
-    ll = (N * (sp.gammaln((nu + K) / 2) - sp.gammaln(nu / 2)
-               - K / 2 * np.log(np.pi * nu) - 0.5 * log_det_R)
-          - (nu + K) / 2 * np.sum(np.log(1.0 + deltas / nu)))
-    return ll
-
-
-def fit_mvt_em(X, max_iter=200, tol=1e-6):
+def fit_mvn_corr(X):
     """
-    Fit zero-mean MVT(0, R, ν) via EM + golden-section search for ν.
+    Fit a Gaussian copula correlation matrix to standard-normal columns.
 
     Parameters
     ----------
@@ -204,67 +192,14 @@ def fit_mvt_em(X, max_iter=200, tol=1e-6):
     Returns
     -------
     R_upper : np.ndarray, shape (K*(K-1)//2,)
-    nu : float
+        Upper triangle of the sample Pearson correlation matrix.
     """
-    N, K = X.shape
-    R  = np.corrcoef(X.T).copy()
+    K = X.shape[1]
+    if K == 1:
+        return np.array([])
+    R = np.corrcoef(X.T)
     np.fill_diagonal(R, 1.0)
-    nu = 5.0
-
-    for _ in range(max_iter):
-        try:
-            R_inv = np.linalg.inv(R)
-        except np.linalg.LinAlgError:
-            break
-        deltas = np.sum((X @ R_inv) * X, axis=1)
-        w = (nu + K) / (nu + deltas)
-
-        Sigma = (X.T * w) @ X / N
-        D = np.sqrt(np.maximum(np.diag(Sigma), 1e-12))
-        R_new = Sigma / np.outer(D, D)
-        np.fill_diagonal(R_new, 1.0)
-
-        try:
-            R_new_inv  = np.linalg.inv(R_new)
-            log_det_R  = np.log(np.maximum(np.linalg.det(R_new), 1e-300))
-        except np.linalg.LinAlgError:
-            R_new = R
-            break
-
-        deltas_new = np.sum((X @ R_new_inv) * X, axis=1)
-
-        def neg_ll(log_nu):
-            nu_ = np.exp(log_nu)
-            ll  = (N * (sp.gammaln((nu_ + K) / 2) - sp.gammaln(nu_ / 2)
-                        - K / 2 * np.log(np.pi * nu_) - 0.5 * log_det_R)
-                   - (nu_ + K) / 2 * np.sum(np.log(1.0 + deltas_new / nu_)))
-            return -ll
-
-        a, b = np.log(1.01), np.log(500.0)
-        gr = (np.sqrt(5) + 1) / 2
-        c  = b - (b - a) / gr
-        d  = a + (b - a) / gr
-        for _ in range(120):
-            if abs(b - a) < 1e-9:
-                break
-            if neg_ll(c) < neg_ll(d):
-                b = d
-            else:
-                a = c
-            c = b - (b - a) / gr
-            d = a + (b - a) / gr
-        nu_new = np.exp((a + b) / 2)
-
-        R_diff  = float(np.max(np.abs(R_new - R)))
-        nu_diff = abs(nu_new - nu) / (nu + 1e-8)
-        R  = R_new
-        nu = nu_new
-
-        if R_diff < tol and nu_diff < tol:
-            break
-
-    idx = np.triu_indices(K, k=1)
-    return R[idx], float(nu)
+    return R[np.triu_indices(K, k=1)]
 
 
 # ── Temp config writer ─────────────────────────────────────────────────────────
@@ -332,15 +267,15 @@ def _worker(args):
 
     Returns
     -------
-    (grid_indices, flat_params, R_upper, nu, raw_X, n_discarded, cpp_peak_kb)  on success
-    (grid_indices, None, None, None, None, None, cpp_peak_kb_or_0)             on failure
+    (grid_indices, flat_params, R_upper, raw_X, n_discarded, cpp_peak_kb)  on success
+    (grid_indices, None, None, None, None, cpp_peak_kb_or_0)              on failure
     """
     (task_id, grid_indices, point_params,
      nEvent, nWorkers_inner, obs_selection, save_raw) = args
 
     temp_cfg = f'/tmp/svj_scan_{task_id}.cfg'
     temp_tsv = f'/tmp/svj_scan_{task_id}.tsv'
-    fail     = (grid_indices, None, None, None, None, None, 0)
+    fail     = (grid_indices, None, None, None, None, 0)
 
     write_point_cfg(temp_cfg, point_params, nEvent, nWorkers_inner, temp_tsv)
 
@@ -381,14 +316,14 @@ def _worker(args):
             return fail
 
         try:
-            R_upper, nu = fit_mvt_em(tr_data)
+            R_upper = fit_mvn_corr(tr_data)
         except Exception:
             return fail
 
         raw_X = (X_valid[:, [col_map[OBSERVABLES[n]['col']] for n in obs_selection]]
                  if save_raw else None)
 
-        return (grid_indices, flat_params, R_upper, nu, raw_X, n_disc, cpp_peak_kb)
+        return (grid_indices, flat_params, R_upper, raw_X, n_disc, cpp_peak_kb)
 
     except Exception:
         return fail
@@ -405,16 +340,13 @@ def _save(out_file, scan_cfg: ScanConfig,
           param_flat, obs_offsets, obs_names,
           scan_params_arr, scan_param_names, n_obs):
     axis_names = list(scan_cfg.scan_axes.keys())
-    n_corr     = n_obs * (n_obs - 1) // 2
     corr_start = int(obs_offsets[-1])
-    nu_idx     = corr_start + n_corr
 
     kwargs = dict(
         axis_names       = np.array(axis_names, dtype=object),
         param_flat       = param_flat,
         param_offsets    = obs_offsets,
         corr_start       = np.array(corr_start, dtype=int),
-        nu_idx           = np.array(nu_idx,     dtype=int),
         obs_names        = np.array(obs_names,  dtype=object),
         scan_params      = scan_params_arr,
         scan_param_names = np.array(scan_param_names, dtype=object),
@@ -430,7 +362,6 @@ def _save_metadata(out_dir, scan_cfg: ScanConfig,
         'obs_selection': list(obs_selection),
         'param_offsets': [int(x) for x in obs_offsets],
         'n_corr':        n_corr,
-        'nu_at_index':   int(obs_offsets[-1]) + n_corr,
         'scan_axes':     {name: list(map(float, vals))
                           for name, vals in scan_cfg.scan_axes.items()},
         'fixed_params':  scan_cfg.fixed_params,
@@ -474,7 +405,6 @@ def _merge(out_dir, n_jobs, keep_shards=False):
         'param_flat':       param_flat,
         'param_offsets':    d0['param_offsets'],
         'corr_start':       d0['corr_start'],
-        'nu_idx':           d0['nu_idx'],
         'obs_names':        d0['obs_names'],
         'scan_params':      scan_params,
         'scan_param_names': d0['scan_param_names'],
@@ -565,7 +495,7 @@ def main():
     n_obs       = len(obs_selection)
     n_corr      = n_obs * (n_obs - 1) // 2
     obs_offsets = obs_param_offsets(obs_selection)
-    total_params = int(obs_offsets[-1]) + n_corr + 1
+    total_params = int(obs_offsets[-1]) + n_corr
 
     # ── Grid ─────────────────────────────────────────────────────────────────────
     axis_names = list(scan_cfg.scan_axes.keys())
@@ -633,7 +563,7 @@ def main():
     print(f"  Grid:       {grid_str} = {total} total  ({total // n_jobs} this job)")
     print(f"  Observables ({n_obs}): {obs_selection}")
     print(f"  Total params/point: {total_params}  "
-          f"(obs: {obs_offsets[-1]}, corr: {n_corr}, nu: 1)")
+          f"(obs: {obs_offsets[-1]}, corr: {n_corr})")
     print(f"  To do:      {n_todo}  (already done: {n_preloaded})")
     print(f"  Events/pt:  {nEvent}")
     if save_raw:
@@ -668,14 +598,13 @@ def main():
                 done   += 1
                 continue
 
-            gidx, flat_p, R_upper, nu, raw_X, n_disc, cpp_rss_kb = result
+            gidx, flat_p, R_upper, raw_X, n_disc, cpp_rss_kb = result
             done += 1
             ok    = flat_p is not None
 
             if ok:
-                param_flat[gidx + (slice(None, corr_start),)] = flat_p
-                param_flat[gidx + (slice(corr_start, -1),)]   = R_upper
-                param_flat[gidx + (-1,)]                       = nu
+                param_flat[gidx + (slice(None, corr_start),)]  = flat_p
+                param_flat[gidx + (slice(corr_start, None),)]  = R_upper
 
                 if save_raw and raw_X is not None:
                     n_ev = len(raw_X)

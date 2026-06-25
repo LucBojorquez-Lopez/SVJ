@@ -212,5 +212,4 @@ python src/run_regression/fit_raw.py \
 | `--scan-npz` | sibling `svj_scan.npz` | Scan NPZ to read grid axes from |
 | `--obs` | from scan NPZ `obs_names` | Comma-separated observable names |
 | `--out-npz` | `svj_scan_refit.npz` | Output NPZ path |
-| `--mvt-iters` | 200 | Max EM iterations for MVT fitting |
 | `--n-workers` | 8 | Parallel worker processes |

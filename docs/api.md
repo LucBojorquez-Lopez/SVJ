@@ -14,11 +14,11 @@ grid_bounds = helpers.svj_grid_bounds()
 
 # Interpolate fitted parameters at any point inside the grid.
 # Pass a dict with a value for each scan axis (keys depend on [scan] in scan_regression.cfg).
-R_upper, nu, obs_params, param_offsets, obs_names = helpers.interpolate_svj_params(
+R_upper, obs_params, param_offsets, obs_names = helpers.interpolate_svj_params(
     {'mZ': 1500, 'jetR': 0.6, 'rinv_pion': 0.3, 'Brmu': 0.3})
 
 # Sample from the interpolated distribution
-X = helpers.sample_svj_new(R_upper, nu, obs_params, param_offsets, obs_names,
+X = helpers.sample_svj_new(R_upper, obs_params, param_offsets, obs_names,
                             n_samples=50_000)
 # X has shape (n_samples, n_obs) in original physical units
 ```

@@ -19,7 +19,6 @@ Usage
     --scan-npz PATH      scan NPZ to read grid axes from (default: sibling of raw NPZ)
     --obs LIST           comma-separated observable names (default: from scan NPZ obs_names)
     --out-npz PATH       output NPZ (default: raw NPZ dir / svj_scan_refit.npz)
-    --mvt-iters N        max EM iterations for MVT fit (default: 200)
     --n-workers N        parallel worker processes (default: 8)
 """
 
@@ -39,7 +38,7 @@ from observables import (
     param_offsets as obs_param_offsets,
     fit_observable_col, validate_scan_selection,
 )
-from scan_svj import fit_mvt_em
+from scan_svj import fit_mvn_corr
 
 
 # ── Per-point re-fitting worker ────────────────────────────────────────────────
@@ -48,13 +47,13 @@ def _refit_worker(args):
     """
     Re-fit one grid point from pre-filtered raw data.
 
-    args = (grid_indices, X_raw, obs_selection, mvt_iters)
+    args = (grid_indices, X_raw, obs_selection)
 
-    Returns (grid_indices, flat_p, R_upper, nu) on success,
-            (grid_indices, None, None, None)     on failure.
+    Returns (grid_indices, flat_p, R_upper) on success,
+            (grid_indices, None, None)       on failure.
     """
-    grid_indices, X_raw, obs_selection, mvt_iters = args
-    fail = (grid_indices, None, None, None)
+    grid_indices, X_raw, obs_selection = args
+    fail = (grid_indices, None, None)
 
     if len(X_raw) < 20:
         return fail
@@ -73,8 +72,8 @@ def _refit_worker(args):
             flat_p[int(offsets[idx]):int(offsets[idx + 1])] = params
             tr_cols.append(y_std)
 
-        R_upper, nu = fit_mvt_em(np.column_stack(tr_cols), max_iter=mvt_iters)
-        return (grid_indices, flat_p, R_upper, nu)
+        R_upper = fit_mvn_corr(np.column_stack(tr_cols))
+        return (grid_indices, flat_p, R_upper)
     except Exception:
         return fail
 
@@ -84,15 +83,12 @@ def _refit_worker(args):
 def _save_refit(out_file, axis_names, axis_vals_dict,
                 param_flat, obs_offsets, obs_names,
                 scan_params, scan_param_names, n_obs):
-    n_corr     = n_obs * (n_obs - 1) // 2
     corr_start = int(obs_offsets[-1])
-    nu_idx     = corr_start + n_corr
     kwargs = dict(
         axis_names       = np.array(axis_names, dtype=object),
         param_flat       = param_flat,
         param_offsets    = obs_offsets,
         corr_start       = np.array(corr_start, dtype=int),
-        nu_idx           = np.array(nu_idx,     dtype=int),
         obs_names        = np.array(obs_names,  dtype=object),
         scan_params      = scan_params,
         scan_param_names = np.array(scan_param_names, dtype=object),
@@ -114,8 +110,6 @@ def main():
                         help='Comma-separated observable names (default: from scan NPZ)')
     parser.add_argument('--out-npz', default=None,
                         help='Output NPZ path (default: sibling svj_scan_refit.npz)')
-    parser.add_argument('--mvt-iters', type=int, default=200,
-                        help='Max EM iterations for MVT fit')
     parser.add_argument('--n-workers', type=int, default=8,
                         help='Number of parallel worker processes')
     args = parser.parse_args()
@@ -162,7 +156,7 @@ def main():
     n_obs        = len(obs_selection)
     n_corr       = n_obs * (n_obs - 1) // 2
     obs_offsets  = obs_param_offsets(obs_selection)
-    total_params = int(obs_offsets[-1]) + n_corr + 1
+    total_params = int(obs_offsets[-1]) + n_corr
 
     # ── Allocate result arrays ────────────────────────────────────────────────
     grid_shape = tuple(axis_sizes)
@@ -176,13 +170,14 @@ def main():
             grid_events[gidx] = []
         grid_events[gidx].append(raw_flat[evt_idx])
 
-    tasks = [(gidx, np.vstack(evts), obs_selection, args.mvt_iters)
+    tasks = [(gidx, np.vstack(evts), obs_selection)
              for gidx, evts in grid_events.items()]
 
     n_todo = len(tasks)
     print(f"Re-fitting {n_todo} grid points from {raw_path.name}")
     print(f"  Axes ({K}): {', '.join(f'{n}({s})' for n, s in zip(axis_names, axis_sizes))}")
     print(f"  Observables ({n_obs}): {obs_selection}")
+    print(f"  Total params/point: {total_params}  (obs: {obs_offsets[-1]}, corr: {n_corr})")
     print(f"  Workers: {args.n_workers}")
 
     out_path   = Path(args.out_npz) if args.out_npz else raw_path.parent / 'svj_scan_refit.npz'
@@ -203,13 +198,12 @@ def main():
                 done   += 1
                 continue
 
-            gidx, flat_p, R_upper, nu = result
+            gidx, flat_p, R_upper = result
             done += 1
             ok = flat_p is not None
             if ok:
-                param_flat[gidx + (slice(None, corr_start),)] = flat_p
-                param_flat[gidx + (slice(corr_start, -1),)]   = R_upper
-                param_flat[gidx + (-1,)]                       = nu
+                param_flat[gidx + (slice(None, corr_start),)]  = flat_p
+                param_flat[gidx + (slice(corr_start, None),)]  = R_upper
             else:
                 failed += 1
 

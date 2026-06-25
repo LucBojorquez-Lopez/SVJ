@@ -3,7 +3,7 @@ svj_explorer.py
 ===============
 Interactive SVJ distribution explorer for Jupyter notebooks.
 
-Loads svj_scan.npz (MVT copula, dynamic observable and parameter selection).
+Loads svj_scan.npz (Gaussian copula, dynamic observable and parameter selection).
 The slider set is built at runtime from the scan axes stored in the NPZ, so
 adding or removing scan axes in scan_regression.cfg automatically updates the
 explorer without code changes.

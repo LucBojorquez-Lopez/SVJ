@@ -721,7 +721,7 @@ def inverse_observable_col(u, pipeline, dist_name, fitted_params):
     Parameters
     ----------
     u : np.ndarray, shape (N,)
-        Uniform values in (0, 1).  These are the MVT marginal CDF outputs.
+        Uniform values in (0, 1).  These are the copula marginal CDF outputs.
     pipeline, dist_name, fitted_params : as in forward_observable_col.
 
     Returns

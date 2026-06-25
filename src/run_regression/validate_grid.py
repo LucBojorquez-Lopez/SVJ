@@ -74,7 +74,7 @@ def _worker(args):
     """
     (task_id,
      full_params,
-     R_upper, nu, flat_obs,
+     R_upper, flat_obs,
      param_offsets_arr, obs_names,
      N1, N2, bins) = args
 
@@ -105,7 +105,7 @@ def _worker(args):
 
     try:
         model = sample_svj_new(
-            R_upper, nu, flat_obs, param_offsets_arr, obs_names,
+            R_upper, flat_obs, param_offsets_arr, obs_names,
             n_samples=N1)
     except Exception as e:
         return task_id, None, f'Sampling failed: {e}'
@@ -166,7 +166,7 @@ def main():
     for i, (fi, sp) in enumerate(zip(frac_idxs, scan_points)):
         full_params = resolve_point(sp, scan['fixed_params'], scan['derived_exprs'])
         try:
-            R_upper, nu, flat_obs = interp_at(scan, sp)
+            R_upper, flat_obs = interp_at(scan, sp)
         except Exception as e:
             print(f'  WARNING: interpolation failed for point {i} '
                   f'({sp}): {e} — skipping.')
@@ -180,7 +180,7 @@ def main():
         tasks.append((
             i,
             full_params,
-            R_upper, nu, flat_obs,
+            R_upper, flat_obs,
             scan['param_offsets'], obs_names,
             args.N1, args.N2, args.bins,
         ))

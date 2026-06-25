@@ -4,7 +4,7 @@ src/helpers.py
 Interpolation helpers and KLD utilities for the SVJ regression model.
 
 Loads svj_scan.npz (new format, from scan_svj.py):
-    param_flat, param_offsets, corr_start, nu_idx, obs_names
+    param_flat, param_offsets, corr_start, obs_names
 
 Also supports the v1 scan (simulated/v1/regression_scan.npz) for KLD utilities.
 Both NPZ files are loaded lazily: importing this module does not fail if they
@@ -305,7 +305,7 @@ def transform_data(data):
 # ══════════════════════════════════════════════════════════════════════════════
 
 _svj_interp = None
-_svj_meta   = {}   # corr_start, nu_idx, param_offsets, obs_names, n_obs
+_svj_meta   = {}   # corr_start, param_offsets, obs_names, n_obs
 
 
 def svj_grid_bounds():
@@ -332,7 +332,6 @@ def _build_svj_interp():
     param_flat    = np.array(svj['param_flat'])
     param_offsets = np.array(svj['param_offsets'], dtype=int)
     corr_start    = int(svj['corr_start'])
-    nu_idx        = int(svj['nu_idx'])
     obs_names     = list(svj['obs_names'])
     n_obs         = len(obs_names)
     n_corr        = n_obs * (n_obs - 1) // 2
@@ -341,7 +340,6 @@ def _build_svj_interp():
         'axis_names':    axis_names,
         'param_offsets': param_offsets,
         'corr_start':    corr_start,
-        'nu_idx':        nu_idx,
         'obs_names':     obs_names,
         'n_obs':         n_obs,
         'n_corr':        n_corr,
@@ -368,10 +366,9 @@ def interpolate_svj_params(params):
 
     Returns
     -------
-    (R_upper, nu, flat_obs_params, param_offsets, obs_names)
+    (R_upper, flat_obs_params, param_offsets, obs_names)
 
     R_upper         : np.ndarray, shape (n_obs*(n_obs-1)//2,)
-    nu              : float
     flat_obs_params : np.ndarray
     param_offsets   : np.ndarray, shape (n_obs+1,)
     obs_names       : list of str
@@ -383,24 +380,21 @@ def interpolate_svj_params(params):
     m          = _svj_meta
 
     cs      = m['corr_start']
-    ni      = m['nu_idx']
     obs_p   = p[:cs]
-    R_upper = p[cs:ni]
-    nu      = float(p[ni])
-    return R_upper, nu, obs_p, m['param_offsets'], m['obs_names']
+    R_upper = p[cs:]
+    return R_upper, obs_p, m['param_offsets'], m['obs_names']
 
 
-def sample_svj_new(R_upper, nu, flat_obs_params, param_offsets, obs_names,
+def sample_svj_new(R_upper, flat_obs_params, param_offsets, obs_names,
                    n_samples=100_000, rng=None):
     """
-    Draw samples from the SVJ MVT-copula model.
+    Draw samples from the SVJ Gaussian-copula model.
 
     Uses the observable inverse pipeline from src/observables.py.
 
     Parameters
     ----------
     R_upper         : array-like, shape (K*(K-1)//2,)
-    nu              : float
     flat_obs_params : array-like, shape (total_obs_params,)
     param_offsets   : array-like, shape (K+1,)
     obs_names       : list of str
@@ -418,17 +412,14 @@ def sample_svj_new(R_upper, nu, flat_obs_params, param_offsets, obs_names,
     R += R.T
     np.fill_diagonal(R, 1.0)
 
-    # Sample MVT(0, R, nu) without scipy.stats.multivariate_t dependency
+    # Sample MVN(0, R) — Gaussian copula
     if rng is None:
-        z = np.random.multivariate_normal(np.zeros(K), R, size=n_samples)
-        v = np.random.chisquare(nu, size=n_samples)
+        Z = np.random.multivariate_normal(np.zeros(K), R, size=n_samples)
     else:
-        z = rng.multivariate_normal(np.zeros(K), R, size=n_samples)
-        v = rng.chisquare(nu, size=n_samples)
-    Z = z * np.sqrt(nu / v[:, None])   # MVT(0, R, nu)
+        Z = rng.multivariate_normal(np.zeros(K), R, size=n_samples)
 
-    # Map MVT marginal CDF (t_nu) → uniform
-    u = np.clip(st.t.cdf(Z, df=nu), 1e-10, 1.0 - 1e-10)   # (n_samples, K)
+    # Map Gaussian marginal CDF N(0,1) → uniform
+    u = np.clip(st.norm.cdf(Z), 1e-10, 1.0 - 1e-10)   # (n_samples, K)
 
     X = np.empty((n_samples, K))
     param_offsets   = np.asarray(param_offsets, dtype=int)

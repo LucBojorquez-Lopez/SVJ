@@ -148,6 +148,42 @@ Maximum Mean Discrepancy with an RBF kernel measures distance between the *joint
 
 ---
 
+## Plotting results
+
+`src/diagnostics.py` provides two functions for visualising the output of
+`validate_production.py`:
+
+```python
+import sys; sys.path.insert(0, 'src')
+from diagnostics import show_validation, plot_validation
+
+# Display interactively (notebook or script)
+show_validation('simulated/svj/validation_production.npz')
+
+# Return the figure for further customisation or saving
+fig = plot_validation('simulated/svj/validation_production.npz', bins=50)
+fig.savefig('validation.pdf', bbox_inches='tight')
+```
+
+The figure contains one panel per observable plus a final MMD panel. Each panel
+overlays three histograms (distributions across the N3 validation points):
+
+| Colour | Comparison | Key |
+|--------|-----------|-----|
+| Blue | Baseline  JS(truth₁, truth₂) | statistical noise floor |
+| Orange | Nearest grid  JS(nearest, truth₁) | naive alternative |
+| Green | Interpolation  JS(model, truth₁) | what the scan model achieves |
+
+Dashed vertical lines and legend entries show the per-population mean.
+
+**How to read the plot:**
+
+- Green ≈ Blue → the interpolation is near the statistical limit. Ideal.
+- Green < Orange → the interpolation beats the naive nearest-grid alternative. Primary success criterion.
+- Green > Orange → the interpolation is *adding* error relative to the naive alternative. Consider a denser grid or revisiting the transform/distribution choices for the affected observables.
+
+---
+
 ## Notes and limitations
 
 - **Interior-only sampling.** Validation points are sampled strictly between grid nodes. Points near grid boundaries are not tested; interpolation accuracy there is expected to be lower.

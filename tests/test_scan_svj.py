@@ -9,10 +9,9 @@ Covers:
   - resolve_point(): simple and chain-derived expressions; circular dependency
     raises ValueError.  (This is the scan_svj.py copy; identical behaviour
     to the _val_utils.py copy is verified independently here.)
-  - _mvt_loglik(): returns a finite scalar; is lower for data that fits poorly.
-  - fit_mvt_em(): R_upper has the correct length K*(K-1)//2; nu is positive
-    and finite; uncorrelated data yields near-zero off-diagonal entries;
-    correlated data recovers the embedded correlation.
+  - fit_mvn_corr(): R_upper has the correct length K*(K-1)//2; values lie in
+    [-1, 1]; uncorrelated data yields near-zero off-diagonals; correlated data
+    recovers the embedded correlation.
 
 No PYTHIA binary is required.
 """
@@ -22,7 +21,7 @@ import textwrap
 import numpy as np
 import pytest
 
-from scan_svj import read_scan_cfg, resolve_point, _mvt_loglik, fit_mvt_em
+from scan_svj import read_scan_cfg, resolve_point, fit_mvn_corr
 
 
 # ── read_scan_cfg ──────────────────────────────────────────────────────────────
@@ -184,143 +183,85 @@ class TestResolvePoint:
         assert result['c'] == pytest.approx(14.0)
 
 
-# ── _mvt_loglik ────────────────────────────────────────────────────────────────
+# ── fit_mvn_corr ───────────────────────────────────────────────────────────────
 
-class TestMvtLoglik:
-
-    def test_finite_for_standard_normal_data(self):
-        rng = np.random.default_rng(40)
-        K, N = 3, 200
-        X = rng.standard_normal((N, K))
-        R_inv = np.eye(K)
-        ll = _mvt_loglik(X, R_inv, 0.0, 5.0)
-        assert np.isfinite(ll), f"log-likelihood is not finite: {ll}"
-
-    def test_scalar_output(self):
-        rng = np.random.default_rng(41)
-        X = rng.standard_normal((100, 2))
-        ll = _mvt_loglik(X, np.eye(2), 0.0, 5.0)
-        assert np.ndim(ll) == 0
-
-    def test_higher_nu_gives_different_value(self):
-        rng = np.random.default_rng(42)
-        X = rng.standard_normal((200, 3))
-        R_inv = np.eye(3)
-        ll_5  = _mvt_loglik(X, R_inv, 0.0, 5.0)
-        ll_50 = _mvt_loglik(X, R_inv, 0.0, 50.0)
-        assert ll_5 != pytest.approx(ll_50, rel=1e-3), (
-            "_mvt_loglik should differ for nu=5 vs nu=50")
-
-    def test_larger_log_det_reduces_likelihood(self):
-        # Larger determinant of R → smaller log-likelihood for the same data
-        rng = np.random.default_rng(43)
-        X = rng.standard_normal((200, 2))
-        R_I = np.eye(2)
-        R_2 = 2.0 * np.eye(2)
-        R_I_inv = np.eye(2)
-        R_2_inv = 0.5 * np.eye(2)
-        ll_I = _mvt_loglik(X, R_I_inv, np.log(np.linalg.det(R_I)), 5.0)
-        ll_2 = _mvt_loglik(X, R_2_inv, np.log(np.linalg.det(R_2)), 5.0)
-        assert ll_I > ll_2  # tighter fit to the data
-
-
-# ── fit_mvt_em ─────────────────────────────────────────────────────────────────
-
-def _sample_mvt(R, nu, N, rng):
-    """Draw N samples from MVT(0, R, nu) using the normal-chi2 construction."""
+def _sample_mvn(R, N, rng):
+    """Draw N samples from MVN(0, R)."""
     K = R.shape[0]
     L = np.linalg.cholesky(R)
-    z = rng.standard_normal((N, K)) @ L.T
-    v = rng.chisquare(nu, size=N)
-    return z * np.sqrt(nu / v[:, None])
+    return rng.standard_normal((N, K)) @ L.T
 
 
-class TestFitMvtEm:
+class TestFitMvnCorr:
 
     def test_r_upper_length_k2(self):
-        K = 2
         rng = np.random.default_rng(50)
-        X = rng.standard_normal((500, K))
-        R_upper, _ = fit_mvt_em(X, max_iter=50)
-        assert len(R_upper) == K * (K - 1) // 2  # = 1
+        X = rng.standard_normal((500, 2))
+        R_upper = fit_mvn_corr(X)
+        assert len(R_upper) == 1
 
     def test_r_upper_length_k3(self):
-        K = 3
         rng = np.random.default_rng(51)
-        X = rng.standard_normal((500, K))
-        R_upper, _ = fit_mvt_em(X, max_iter=50)
-        assert len(R_upper) == K * (K - 1) // 2  # = 3
+        X = rng.standard_normal((500, 3))
+        R_upper = fit_mvn_corr(X)
+        assert len(R_upper) == 3
 
     def test_r_upper_length_k5(self):
-        K = 5
         rng = np.random.default_rng(52)
-        X = rng.standard_normal((500, K))
-        R_upper, _ = fit_mvt_em(X, max_iter=50)
-        assert len(R_upper) == K * (K - 1) // 2  # = 10
-
-    def test_nu_positive(self):
-        rng = np.random.default_rng(53)
-        X = rng.standard_normal((500, 3))
-        _, nu = fit_mvt_em(X, max_iter=50)
-        assert nu > 0
-
-    def test_nu_finite(self):
-        rng = np.random.default_rng(54)
-        X = rng.standard_normal((500, 3))
-        _, nu = fit_mvt_em(X, max_iter=50)
-        assert np.isfinite(nu)
-
-    def test_uncorrelated_data_small_off_diagonal(self):
-        # Draw uncorrelated t(5) data; fitted off-diagonals should be small
-        K = 3
-        rng = np.random.default_rng(55)
-        X = _sample_mvt(np.eye(K), 5.0, 4000, rng)
-        R_upper, _ = fit_mvt_em(X, max_iter=100)
-        assert np.all(np.abs(R_upper) < 0.15), (
-            f"Off-diagonal entries too large for uncorrelated data: {R_upper}")
-
-    def test_correlated_data_recovers_correlation(self):
-        K = 2
-        rho_true = 0.7
-        R_true = np.array([[1.0, rho_true], [rho_true, 1.0]])
-        rng = np.random.default_rng(56)
-        X = _sample_mvt(R_true, 5.0, 6000, rng)
-        R_upper, _ = fit_mvt_em(X, max_iter=200)
-        # R_upper[0] is the (0,1) correlation
-        assert R_upper[0] > 0.55, (
-            f"Expected correlation > 0.55, got {R_upper[0]:.3f}")
-        assert R_upper[0] < 0.90, (
-            f"Expected correlation < 0.90, got {R_upper[0]:.3f}")
-
-    def test_negative_correlation_recovered(self):
-        K = 2
-        rho_true = -0.6
-        R_true = np.array([[1.0, rho_true], [rho_true, 1.0]])
-        rng = np.random.default_rng(57)
-        X = _sample_mvt(R_true, 5.0, 6000, rng)
-        R_upper, _ = fit_mvt_em(X, max_iter=200)
-        assert R_upper[0] < -0.4, (
-            f"Expected negative correlation, got {R_upper[0]:.3f}")
-
-    def test_t_data_nu_finite_and_moderate(self):
-        # Data from t(5) → nu should converge to a finite value (not 500)
-        K = 3
-        rng = np.random.default_rng(58)
-        X = _sample_mvt(np.eye(K), 5.0, 5000, rng)
-        _, nu = fit_mvt_em(X, max_iter=200)
-        assert 2.0 < nu < 200.0, (
-            f"nu={nu:.1f} out of expected range (2, 200) for t(5) data")
+        X = rng.standard_normal((500, 5))
+        R_upper = fit_mvn_corr(X)
+        assert len(R_upper) == 10
 
     def test_r_upper_values_in_neg1_pos1(self):
-        K = 4
-        rng = np.random.default_rng(59)
-        X = rng.standard_normal((1000, K))
-        R_upper, _ = fit_mvt_em(X, max_iter=50)
+        rng = np.random.default_rng(53)
+        X = rng.standard_normal((1000, 4))
+        R_upper = fit_mvn_corr(X)
         assert np.all(R_upper >= -1.0)
         assert np.all(R_upper <= 1.0)
 
-    def test_returns_tuple_of_two(self):
-        rng = np.random.default_rng(60)
-        X = rng.standard_normal((200, 2))
-        result = fit_mvt_em(X, max_iter=10)
-        assert len(result) == 2
+    def test_uncorrelated_data_small_off_diagonal(self):
+        rng = np.random.default_rng(54)
+        X = _sample_mvn(np.eye(3), 4000, rng)
+        R_upper = fit_mvn_corr(X)
+        assert np.all(np.abs(R_upper) < 0.15), (
+            f"Off-diagonal entries too large for uncorrelated data: {R_upper}")
+
+    def test_positive_correlation_recovered(self):
+        rho_true = 0.7
+        R_true = np.array([[1.0, rho_true], [rho_true, 1.0]])
+        rng = np.random.default_rng(55)
+        X = _sample_mvn(R_true, 6000, rng)
+        R_upper = fit_mvn_corr(X)
+        assert R_upper[0] > 0.60, (
+            f"Expected correlation > 0.60, got {R_upper[0]:.3f}")
+        assert R_upper[0] < 0.85, (
+            f"Expected correlation < 0.85, got {R_upper[0]:.3f}")
+
+    def test_negative_correlation_recovered(self):
+        rho_true = -0.6
+        R_true = np.array([[1.0, rho_true], [rho_true, 1.0]])
+        rng = np.random.default_rng(56)
+        X = _sample_mvn(R_true, 6000, rng)
+        R_upper = fit_mvn_corr(X)
+        assert R_upper[0] < -0.45, (
+            f"Expected negative correlation, got {R_upper[0]:.3f}")
+
+    def test_identity_input_near_zero_off_diagonal(self):
+        # Independent standard normals → corrcoef ≈ I
+        rng = np.random.default_rng(57)
+        X = rng.standard_normal((5000, 4))
+        R_upper = fit_mvn_corr(X)
+        assert np.all(np.abs(R_upper) < 0.10), (
+            f"Expected near-zero off-diagonals for independent data: {R_upper}")
+
+    def test_returns_1d_array(self):
+        rng = np.random.default_rng(58)
+        X = rng.standard_normal((200, 3))
+        R_upper = fit_mvn_corr(X)
+        assert R_upper.ndim == 1
+
+    def test_k1_returns_empty(self):
+        rng = np.random.default_rng(59)
+        X = rng.standard_normal((200, 1))
+        R_upper = fit_mvn_corr(X)
+        assert len(R_upper) == 0

@@ -14,7 +14,8 @@ Covers:
   - kld_params(): KLD(P‖P) ≈ 0; KLD(P‖Q) > 0 for clearly different Q; MC
     non-negativity.
   - sample_svj_new(): K=1 case; K=2 correlated case; shape, finiteness, and
-    physical-space positivity for pT-like observables.
+    physical-space positivity for pT-like observables.  Uses the Gaussian
+    copula (no nu parameter).
 
 No PYTHIA binary required — only numpy/scipy and the src/ Python modules.
 """
@@ -332,12 +333,11 @@ class TestSampleSvjNew:
         params = self._fit_obs('leadVisPt', x)
 
         R_upper = np.array([])          # K=1 → no off-diagonal elements
-        nu = 5.0
         flat_params = np.array(params)
         offsets = param_offsets(['leadVisPt'])
 
         samples = sample_svj_new(
-            R_upper, nu, flat_params, offsets, ['leadVisPt'],
+            R_upper, flat_params, offsets, ['leadVisPt'],
             n_samples=1000, rng=rng)
         assert samples.shape == (1000, 1)
 
@@ -346,7 +346,7 @@ class TestSampleSvjNew:
         x = rng.lognormal(mean=6.0, sigma=0.4, size=500)
         params = self._fit_obs('leadVisPt', x)
         samples = sample_svj_new(
-            np.array([]), 5.0, np.array(params),
+            np.array([]), np.array(params),
             param_offsets(['leadVisPt']), ['leadVisPt'],
             n_samples=2000, rng=rng)
         assert np.all(np.isfinite(samples))
@@ -357,7 +357,7 @@ class TestSampleSvjNew:
         x = rng.lognormal(mean=6.0, sigma=0.4, size=500)
         params = self._fit_obs('leadVisPt', x)
         samples = sample_svj_new(
-            np.array([]), 5.0, np.array(params),
+            np.array([]), np.array(params),
             param_offsets(['leadVisPt']), ['leadVisPt'],
             n_samples=2000, rng=rng)
         assert np.all(samples > 0), "pT samples must be positive"
@@ -370,12 +370,11 @@ class TestSampleSvjNew:
         p2 = self._fit_obs('MET', x2)
 
         R_upper = np.array([0.3])       # K=2 → one upper-triangle element
-        nu = 5.0
         flat_params = np.concatenate([p1, p2])
         offsets = param_offsets(['leadVisPt', 'MET'])
 
         samples = sample_svj_new(
-            R_upper, nu, flat_params, offsets, ['leadVisPt', 'MET'],
+            R_upper, flat_params, offsets, ['leadVisPt', 'MET'],
             n_samples=2000, rng=rng)
         assert samples.shape == (2000, 2)
 
@@ -387,7 +386,7 @@ class TestSampleSvjNew:
         p2 = self._fit_obs('MET', x2)
         flat_params = np.concatenate([p1, p2])
         samples = sample_svj_new(
-            np.array([0.3]), 5.0, flat_params,
+            np.array([0.3]), flat_params,
             param_offsets(['leadVisPt', 'MET']),
             ['leadVisPt', 'MET'],
             n_samples=2000, rng=rng)
@@ -399,7 +398,7 @@ class TestSampleSvjNew:
         x = rng.lognormal(mean=6.0, sigma=0.4, size=1000)
         params = self._fit_obs('leadVisPt', x)
         samples = sample_svj_new(
-            np.array([]), 5.0, np.array(params),
+            np.array([]), np.array(params),
             param_offsets(['leadVisPt']), ['leadVisPt'],
             n_samples=5000, rng=rng)
         # Median of samples should be within factor 3 of the data median
@@ -417,7 +416,7 @@ class TestSampleSvjNew:
         p2 = self._fit_obs('MET', x2)
         flat_params = np.concatenate([p1, p2])
         samples = sample_svj_new(
-            np.array([0.0]), 30.0, flat_params,
+            np.array([0.0]), flat_params,
             param_offsets(['leadVisPt', 'MET']),
             ['leadVisPt', 'MET'],
             n_samples=5000, rng=rng)

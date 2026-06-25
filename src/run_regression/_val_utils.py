@@ -70,7 +70,6 @@ def load_scan(npz_path):
         obs_names     list[str]
         param_offsets np.ndarray (n_obs+1,)
         corr_start    int
-        nu_idx        int
         fixed_params  dict[str, float]
         derived_exprs dict[str, str]
         interp        RegularGridInterpolator over param_flat
@@ -84,7 +83,6 @@ def load_scan(npz_path):
     obs_names  = [str(n) for n in npz['obs_names']]
     offsets    = np.array(npz['param_offsets'], dtype=int)
     corr_start = int(npz['corr_start'])
-    nu_idx     = int(npz['nu_idx'])
 
     meta_path = npz_path.parent / 'svj_scan_meta.json'
     if not meta_path.exists():
@@ -105,7 +103,6 @@ def load_scan(npz_path):
         'obs_names':     obs_names,
         'param_offsets': offsets,
         'corr_start':    corr_start,
-        'nu_idx':        nu_idx,
         'fixed_params':  meta['fixed_params'],
         'derived_exprs': meta['derived_exprs'],
         'interp':        interp,
@@ -121,15 +118,13 @@ def interp_at(scan, scan_point):
     Returns
     -------
     R_upper       np.ndarray (n_corr,)
-    nu            float
     flat_obs      np.ndarray (total_obs_params,)
     """
     axis_names = scan['axis_names']
     pt = np.array([[scan_point[n] for n in axis_names]])
     p  = scan['interp'](pt)[0]
     cs = scan['corr_start']
-    ni = scan['nu_idx']
-    return p[cs:ni], float(p[ni]), p[:cs]
+    return p[cs:], p[:cs]
 
 
 # ── Interior point sampler ─────────────────────────────────────────────────────

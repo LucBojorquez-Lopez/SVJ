@@ -18,7 +18,7 @@ The pipeline has four stages.
 
 **Marginal fitting.** For each observable at each grid point, a user-defined sequence of invertible transforms is applied (e.g. an affine flip followed by Box-Cox, to symmetrize a bounded left-skewed distribution). Any free transform parameters are fitted to the data and stored. The transformed observable is then fitted to a user-chosen parametric distribution (e.g. generalized normal); its parameters are stored alongside the transform parameters. Finally, the probability integral transform maps each marginal to U[0,1].
 
-**Copula.** The per-observable U[0,1] values are mapped through the probit to N(0,1). A multivariate-t distribution is fitted to the resulting vectors to capture inter-observable correlations; its parameters (correlation matrix, degrees of freedom ν) are stored alongside the marginal parameters.
+**Copula.** The per-observable U[0,1] values are mapped through the probit to N(0,1). A Gaussian copula is fitted to the resulting vectors to capture inter-observable correlations; its correlation matrix R is estimated via Pearson's `corrcoef` and stored alongside the marginal parameters.
 
 **Interpolation and sampling.** All stored parameters are interpolated jointly over the grid using a `LinearGridInterpolator`. At any new parameter point inside the grid, interpolated parameters are recovered in milliseconds. Sampling from the resulting joint distribution and inverting all transforms yields estimated observable samples in original physical units.
 
@@ -51,10 +51,10 @@ Once the scan NPZ is ready, sample from the interpolated distribution at any poi
 import sys; sys.path.insert(0, 'src')
 import helpers
 
-R_upper, nu, obs_params, param_offsets, obs_names = helpers.interpolate_svj_params(
+R_upper, obs_params, param_offsets, obs_names = helpers.interpolate_svj_params(
     {'mZ': 1500, 'jetR': 0.6, 'rinv_pion': 0.3, 'Brmu': 0.3})
 
-X = helpers.sample_svj_new(R_upper, nu, obs_params, param_offsets, obs_names,
+X = helpers.sample_svj_new(R_upper, obs_params, param_offsets, obs_names,
                             n_samples=50_000)
 # X: (50000, n_obs) array in original physical units
 ```
