@@ -19,12 +19,12 @@
 #   n-mmd     = 2000  MMD subsample size
 
 #SBATCH --job-name=svj_val
-#SBATCH --array=0-15                   # 16 tasks; must match N_JOBS below
+#SBATCH --array=1,2,4,6,10,11                   # 16 tasks; must match N_JOBS below
 #SBATCH --nodes=1
 #SBATCH -c 16                          # CPUs per task; matches --n-workers
 #SBATCH -p arguelles_delgado
 #SBATCH --mem=3G
-#SBATCH -t 1-00:00                     # 24 h ceiling; expected ~18 h per task
+#SBATCH -t 0-10:00                     # 24 h ceiling; expected ~18 h per task
 #SBATCH --output=logs/svj_val_%A_%a.out
 #SBATCH --error=logs/svj_val_%A_%a.err
 #SBATCH --mail-type=END,FAIL
