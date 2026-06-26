@@ -43,7 +43,7 @@ def plot_observable_transforms(
     tsv_path,
     obs='default',
     n_events=None,
-    figsize_per_obs=(12, 3),
+    figsize_per_obs=(12, 4.5),
     bins=60,
 ):
     """
@@ -172,7 +172,7 @@ def plot_observable_transforms(
                     color='crimson', lw=1.8, label=dist_label)
             ax.set_title('After transforms', fontsize=10)
             ax.set_xlabel('Transformed value', fontsize=10)
-            ax.legend(fontsize=7, framealpha=0.6)
+            ax.legend(fontsize=7, framealpha=0.6, loc = 'best')
 
             # Panel 3: probit-mapped (should be N(0,1))
             ax = axes[2]
@@ -187,7 +187,7 @@ def plot_observable_transforms(
             ax.set_xlabel('z', fontsize=10)
             ax.legend(fontsize=8, framealpha=0.6)
 
-            fig.tight_layout(rect=[0, 0, 1, 0.88])
+            fig.tight_layout(rect=[0, 0, 1, 0.90])
             figs.append(fig)
 
     return figs
@@ -491,4 +491,273 @@ def show_validation(npz_path, **kwargs):
     """
     import matplotlib.pyplot as plt
     plot_validation(npz_path, **kwargs)
+    plt.show()
+
+
+def plot_validation_diff(
+    npz_path,
+    bins=40,
+    figsize=None,
+    title=None,
+    ncols=3,
+):
+    """
+    Plot the distribution of (baseline − interp) and (baseline − nearest) JS
+    differences across validation points, one panel per observable plus a joint
+    MMD panel.
+
+    Positive values indicate that the comparison (interp or nearest) is closer
+    to truth than the statistical noise floor; negative values indicate it is
+    farther.  The primary interest is whether (baseline − interp) sits above
+    (baseline − nearest), i.e. whether the interpolation improves over the
+    naive nearest-grid alternative.
+
+    Parameters
+    ----------
+    npz_path : str or Path
+        Path to the validation NPZ produced by validate_production.py.
+    bins : int
+        Histogram bins per panel (default 40).
+    figsize : (float, float) or None
+        Figure size. Auto-sized from ncols/nrows when None.
+    title : str or None
+        Figure suptitle. Defaults to the filename and key run settings.
+    ncols : int
+        Subplot columns (default 3).
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+    """
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        raise ImportError("matplotlib is required for plot_validation_diff.")
+
+    npz = np.load(npz_path, allow_pickle=True)
+
+    js_base  = np.array(npz['js_baseline'])    # (N3, n_obs)
+    js_inter = np.array(npz['js_interp'])      # (N3, n_obs)
+    js_near  = np.array(npz['js_nearest'])     # (N3, n_obs)
+    mmd_base  = np.array(npz['mmd_baseline'])  # (N3,)
+    mmd_inter = np.array(npz['mmd_interp'])    # (N3,)
+    mmd_near  = np.array(npz['mmd_nearest'])   # (N3,)
+    obs_names = [str(n) for n in npz['obs_names']]
+    N3 = int(npz['N3'])
+    N2 = int(npz['N2'])
+    N1 = int(npz['N1'])
+
+    n_obs    = len(obs_names)
+    n_panels = n_obs + 1
+    nrows    = int(np.ceil(n_panels / ncols))
+
+    if figsize is None:
+        figsize = (5.2 * ncols, 3.8 * nrows)
+
+    with plt.rc_context(_PLOT_RCPARAMS):
+        fig, axes = plt.subplots(nrows, ncols, figsize=figsize)
+        axes = np.array(axes).flatten()
+
+        # ── JS difference panels (one per observable) ─────────────────────────
+        for i, obs_name in enumerate(obs_names):
+            ax  = axes[i]
+            lbl = OBSERVABLES.get(obs_name, {}).get('label', obs_name)
+
+            diff_interp = js_base[:, i] - js_inter[:, i]
+            diff_near   = js_base[:, i] - js_near[:,  i]
+
+            all_vals = np.concatenate([diff_interp, diff_near])
+            finite   = all_vals[np.isfinite(all_vals)]
+            if len(finite) == 0:
+                ax.set_title(f'{lbl}\n(all NaN)', fontsize=10)
+                continue
+            xlo = float(np.percentile(finite, 0.5))
+            xhi = float(np.percentile(finite, 99.5))
+            rng = (xlo, xhi)
+
+            _val_hist(ax, diff_near,   _VAL_COLORS['nearest'],
+                      'Baseline − Nearest', bins, rng)
+            _val_hist(ax, diff_interp, _VAL_COLORS['interp'],
+                      'Baseline − Interp',  bins, rng)
+
+            n_ok = int(np.sum(np.isfinite(diff_interp)))
+            ax.axvline(0.0, color='black', linestyle=':', linewidth=1.0, alpha=0.6)
+            ax.set_xlabel('JS difference', fontsize=10)
+            ax.set_ylabel('Density',       fontsize=9)
+            ax.set_title(f'{lbl}  (n={n_ok})', fontsize=10)
+            ax.legend(framealpha=0.5)
+
+        # ── MMD difference panel ──────────────────────────────────────────────
+        ax_mmd = axes[n_obs]
+        diff_mmd_interp = mmd_base - mmd_inter
+        diff_mmd_near   = mmd_base - mmd_near
+
+        all_mmd  = np.concatenate([diff_mmd_interp, diff_mmd_near])
+        finite_m = all_mmd[np.isfinite(all_mmd)]
+        if len(finite_m) > 0:
+            xlo_m = float(np.percentile(finite_m, 0.5))
+            xhi_m = float(np.percentile(finite_m, 99.5))
+            rng_m = (xlo_m, xhi_m)
+            _val_hist(ax_mmd, diff_mmd_near,   _VAL_COLORS['nearest'],
+                      'Baseline − Nearest', bins, rng_m)
+            _val_hist(ax_mmd, diff_mmd_interp, _VAL_COLORS['interp'],
+                      'Baseline − Interp',  bins, rng_m)
+        n_ok_mmd = int(np.sum(np.isfinite(diff_mmd_interp)))
+        ax_mmd.axvline(0.0, color='black', linestyle=':', linewidth=1.0, alpha=0.6)
+        ax_mmd.set_xlabel('MMD difference', fontsize=10)
+        ax_mmd.set_ylabel('Density',        fontsize=9)
+        ax_mmd.set_title(f'MMD — joint  (n={n_ok_mmd})', fontsize=10)
+        ax_mmd.legend(framealpha=0.5)
+
+        # Hide unused axes
+        for j in range(n_panels, len(axes)):
+            axes[j].set_visible(False)
+
+        if title is None:
+            title = (f'{Path(npz_path).name} — differences — '
+                     f'N3={N3}  N2={N2}  N1={N1}')
+        fig.suptitle(title, fontsize=12)
+        fig.tight_layout()
+
+    return fig
+
+
+def show_validation_diff(npz_path, **kwargs):
+    """
+    Load a validation_production.npz and display the JS + MMD difference plot.
+
+    Thin wrapper around plot_validation_diff that also calls plt.show().
+    All keyword arguments are forwarded to plot_validation_diff.
+
+    Example
+    -------
+    from diagnostics import show_validation_diff
+    show_validation_diff('simulated/svj/validation_production.npz')
+    """
+    import matplotlib.pyplot as plt
+    plot_validation_diff(npz_path, **kwargs)
+    plt.show()
+
+
+def plot_interp_vs_nearest(
+    npz_path,
+    bins=40,
+    figsize=None,
+    title=None,
+    ncols=3,
+):
+    """
+    Plot the distribution of (interp − nearest) JS distance across validation
+    points, one panel per observable plus a joint MMD panel.
+
+    Negative values mean the interpolation outperforms the nearest-grid
+    alternative; positive values mean the nearest-grid point is closer to
+    truth for that validation point.
+
+    Parameters
+    ----------
+    npz_path : str or Path
+        Path to the validation NPZ produced by validate_production.py.
+    bins : int
+        Histogram bins per panel (default 40).
+    figsize : (float, float) or None
+        Figure size. Auto-sized from ncols/nrows when None.
+    title : str or None
+        Figure suptitle. Defaults to the filename and key run settings.
+    ncols : int
+        Subplot columns (default 3).
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+    """
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        raise ImportError("matplotlib is required for plot_interp_vs_nearest.")
+
+    npz = np.load(npz_path, allow_pickle=True)
+
+    js_inter = np.array(npz['js_interp'])      # (N3, n_obs)
+    js_near  = np.array(npz['js_nearest'])     # (N3, n_obs)
+    mmd_inter = np.array(npz['mmd_interp'])    # (N3,)
+    mmd_near  = np.array(npz['mmd_nearest'])   # (N3,)
+    obs_names = [str(n) for n in npz['obs_names']]
+    N3 = int(npz['N3'])
+    N2 = int(npz['N2'])
+    N1 = int(npz['N1'])
+
+    n_obs    = len(obs_names)
+    n_panels = n_obs + 1
+    nrows    = int(np.ceil(n_panels / ncols))
+
+    if figsize is None:
+        figsize = (5.2 * ncols, 3.8 * nrows)
+
+    _COLOR = 'mediumpurple'
+
+    with plt.rc_context(_PLOT_RCPARAMS):
+        fig, axes = plt.subplots(nrows, ncols, figsize=figsize)
+        axes = np.array(axes).flatten()
+
+        for i, obs_name in enumerate(obs_names):
+            ax  = axes[i]
+            lbl = OBSERVABLES.get(obs_name, {}).get('label', obs_name)
+
+            diff = js_inter[:, i] - js_near[:, i]
+            finite = diff[np.isfinite(diff)]
+            if len(finite) == 0:
+                ax.set_title(f'{lbl}\n(all NaN)', fontsize=10)
+                continue
+            rng = (float(np.percentile(finite, 0.5)),
+                   float(np.percentile(finite, 99.5)))
+
+            _val_hist(ax, diff, _COLOR, 'Interp − Nearest', bins, rng)
+
+            ax.axvline(0.0, color='black', linestyle=':', linewidth=1.0, alpha=0.6)
+            ax.set_xlabel('JS difference (interp − nearest)', fontsize=10)
+            ax.set_ylabel('Density', fontsize=9)
+            ax.set_title(f'{lbl}  (n={int(np.sum(np.isfinite(diff)))})', fontsize=10)
+            ax.legend(framealpha=0.5)
+
+        ax_mmd = axes[n_obs]
+        diff_mmd = mmd_inter - mmd_near
+        finite_m = diff_mmd[np.isfinite(diff_mmd)]
+        if len(finite_m) > 0:
+            rng_m = (float(np.percentile(finite_m, 0.5)),
+                     float(np.percentile(finite_m, 99.5)))
+            _val_hist(ax_mmd, diff_mmd, _COLOR, 'Interp − Nearest', bins, rng_m)
+        ax_mmd.axvline(0.0, color='black', linestyle=':', linewidth=1.0, alpha=0.6)
+        ax_mmd.set_xlabel('MMD difference (interp − nearest)', fontsize=10)
+        ax_mmd.set_ylabel('Density', fontsize=9)
+        ax_mmd.set_title(
+            f'MMD — joint  (n={int(np.sum(np.isfinite(diff_mmd)))})', fontsize=10)
+        ax_mmd.legend(framealpha=0.5)
+
+        for j in range(n_panels, len(axes)):
+            axes[j].set_visible(False)
+
+        if title is None:
+            title = (f'{Path(npz_path).name} — interp vs nearest — '
+                     f'N3={N3}  N2={N2}  N1={N1}')
+        fig.suptitle(title, fontsize=12)
+        fig.tight_layout()
+
+    return fig
+
+
+def show_interp_vs_nearest(npz_path, **kwargs):
+    """
+    Load a validation_production.npz and display the interp-vs-nearest
+    difference plot.
+
+    Thin wrapper around plot_interp_vs_nearest that also calls plt.show().
+
+    Example
+    -------
+    from diagnostics import show_interp_vs_nearest
+    show_interp_vs_nearest('simulated/svj/validation_production.npz')
+    """
+    import matplotlib.pyplot as plt
+    plot_interp_vs_nearest(npz_path, **kwargs)
     plt.show()

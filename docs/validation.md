@@ -150,37 +150,97 @@ Maximum Mean Discrepancy with an RBF kernel measures distance between the *joint
 
 ## Plotting results
 
-`src/diagnostics.py` provides two functions for visualising the output of
-`validate_production.py`:
+`src/diagnostics.py` provides three plot families for visualising the output of
+`validate_production.py`.  Each family has a `plot_*` variant (returns the
+figure) and a `show_*` variant (calls `plt.show()` — prefer this in notebooks
+to avoid double-rendering).
+
+---
+
+### 1 — Raw JS / MMD distributions — `show_validation`
 
 ```python
 import sys; sys.path.insert(0, 'src')
 from diagnostics import show_validation, plot_validation
 
-# Display interactively (notebook or script)
 show_validation('simulated/svj/validation_production.npz')
 
-# Return the figure for further customisation or saving
 fig = plot_validation('simulated/svj/validation_production.npz', bins=50)
 fig.savefig('validation.pdf', bbox_inches='tight')
 ```
 
-The figure contains one panel per observable plus a final MMD panel. Each panel
-overlays three histograms (distributions across the N3 validation points):
+One panel per observable plus a final MMD panel.  Each panel overlays three
+histograms across the N3 validation points:
 
 | Colour | Comparison | Key |
 |--------|-----------|-----|
-| Blue | Baseline  JS(truth₁, truth₂) | statistical noise floor |
+| Blue   | Baseline  JS(truth₁, truth₂)   | statistical noise floor |
 | Orange | Nearest grid  JS(nearest, truth₁) | naive alternative |
-| Green | Interpolation  JS(model, truth₁) | what the scan model achieves |
+| Green  | Interpolation  JS(model, truth₁)  | what the scan model achieves |
 
 Dashed vertical lines and legend entries show the per-population mean.
 
-**How to read the plot:**
+**How to read:** Green ≈ Blue → near statistical limit (ideal). Green < Orange
+→ interpolation beats the naive alternative (primary success criterion). Green
+> Orange → interpolation is adding error; consider a denser grid or different
+transform choices.
 
-- Green ≈ Blue → the interpolation is near the statistical limit. Ideal.
-- Green < Orange → the interpolation beats the naive nearest-grid alternative. Primary success criterion.
-- Green > Orange → the interpolation is *adding* error relative to the naive alternative. Consider a denser grid or revisiting the transform/distribution choices for the affected observables.
+![show_validation example](img/validation.png)
+
+---
+
+### 2 — Baseline-minus comparisons — `show_validation_diff`
+
+```python
+from diagnostics import show_validation_diff, plot_validation_diff
+
+show_validation_diff('simulated/svj/validation_production.npz')
+
+fig = plot_validation_diff('simulated/svj/validation_production.npz', bins=50)
+fig.savefig('validation_diff.pdf', bbox_inches='tight')
+```
+
+Same layout as above, but each panel shows two histograms of *differences*
+rather than raw distances:
+
+| Colour | Quantity |
+|--------|----------|
+| Green  | Baseline − Interp  (JS_baseline − JS_interp)   |
+| Orange | Baseline − Nearest (JS_baseline − JS_nearest)  |
+
+A dotted black line marks zero.  **Positive** values mean the comparison is
+closer to truth than the statistical noise floor; **negative** values mean it
+is farther.  The interpolation is doing well when the green distribution sits
+to the right of the orange one.
+
+![show_validation_diff example](img/validation_diff.png)
+
+---
+
+### 3 — Interpolation vs nearest-grid — `show_interp_vs_nearest`
+
+```python
+from diagnostics import show_interp_vs_nearest, plot_interp_vs_nearest
+
+show_interp_vs_nearest('simulated/svj/validation_production.npz')
+
+fig = plot_interp_vs_nearest('simulated/svj/validation_production.npz', bins=50)
+fig.savefig('interp_vs_nearest.pdf', bbox_inches='tight')
+```
+
+One histogram per panel (purple) showing `JS_interp − JS_nearest` across the
+N3 validation points (and the MMD equivalent for the joint panel).  A dotted
+black line marks zero.
+
+- **Negative** → interpolation outperforms the nearest-grid alternative for
+  that validation point.
+- **Positive** → the nearest-grid point is closer to truth.
+
+This is the most direct view of whether the interpolation adds value over the
+naive baseline.
+
+![show_interp_vs_nearest example](img/interp_vs_nearest.png)
+
 
 ---
 
