@@ -185,6 +185,8 @@ Dashed vertical lines and legend entries show the per-population mean.
 > Orange → interpolation is adding error; consider a denser grid or different
 transform choices.
 
+**This example:** From the written report, showing both better fitted observables (MET, Cluster mass 1, jet thrust) and some less-well fitted ones (leading jet pT, maximum muon pT).
+
 ![show_validation example](img/validation.png)
 
 ---

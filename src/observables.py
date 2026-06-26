@@ -278,7 +278,7 @@ OBSERVABLES = {
         'pipeline':        [('affine_flip', {'a': 1.0}), ('boxcox', {})],
         'distribution':    'gennorm',
         'default_include': True,
-        'label':           r'$1 - $ jet thrust',
+        'label':           r'Jet thrust',
         'desc':            'Leading-jet thrust T; regressed as 1−T after flipping.',
     },
 
