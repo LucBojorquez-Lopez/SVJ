@@ -6,3 +6,4 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 simulated/tsv/report_figures/
+simulated/tsv/play_around/

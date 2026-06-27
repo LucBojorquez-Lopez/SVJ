@@ -70,6 +70,10 @@ struct JetKin {
   double j2_px, j2_py, j2_pz, j2_E;
 };
 
+// Invisible final-state particle (neutrino or dark) stored for geometric matching
+// into visible-only jets after clustering.
+struct InvisPtcl { double eta, phi, pt; int tag; };
+
 // Physics parameters
 static double mZ        = 2000.0;
 static double mq        =    4.0;
@@ -224,6 +228,8 @@ static const std::vector<std::string> OBS_NAMES = {
     "tau1",      "tau2",   "tau3",
     "dPhiMETclose", "dPhiMETfar", "nJets",
     "closeJetIsLead", "nInvClose", "metPhi",
+    "HT", "RT", "Meff",
+    "leadJetMass", "nConst", "fInv",
 };
 
 // ── Worker: collect per-event observables ─────────────────────────────────────
@@ -245,6 +251,9 @@ static void runWorker(int workerID, int nEvtWorker,
 
     std::vector<fastjet::PseudoJet> particles;
     particles.reserve(event.size());
+    // Invisible particles (neutrinos + dark) stored for geometric matching
+    // into the visible-only jet cones after clustering.
+    std::vector<InvisPtcl> invis_ptcls;
 
     // Tracked during particle loop
     double max_ele_pt = 0.0, max_mu_pt = 0.0;
@@ -283,9 +292,22 @@ static void runWorker(int workerID, int nEvtWorker,
         s_pt2 += px*px + py*py;
       }
 
-      fastjet::PseudoJet pj(p.px(), p.py(), p.pz(), p.e());
-      pj.set_user_index(ptag);
-      particles.push_back(pj);
+      if (ptag < TAG_INV) {
+        // Visible + muon only: feed into jet clustering so jet axes are
+        // determined purely by detectable particles.
+        fastjet::PseudoJet pj(p.px(), p.py(), p.pz(), p.e());
+        pj.set_user_index(ptag);
+        particles.push_back(pj);
+      } else {
+        // Neutrinos (TAG_INV) + dark pions/rhos (TAG_DARK): store kinematics
+        // for geometric matching into the visible-only jet cones below.
+        double px = p.px(), py = p.py(), pz = p.pz();
+        double pt = std::sqrt(px*px + py*py);
+        double pm = std::sqrt(px*px + py*py + pz*pz);
+        double eta = (pm > std::fabs(pz)) ? 0.5*std::log((pm+pz)/(pm-pz))
+                                          : (pz > 0 ? 1e9 : -1e9);
+        invis_ptcls.push_back({eta, std::atan2(py, px), pt, ptag});
+      }
     }
 
     fastjet::ClusterSequence cs(particles, jet_def);
@@ -304,7 +326,8 @@ static void runWorker(int workerID, int nEvtWorker,
     std::vector<std::array<double,4>> lead_constits;          // visible constituents of leading jet (substructure)
     std::vector<std::array<double,4>> all_vis_constits;       // visible constituents of ALL passing jets (hemispheres)
     std::vector<std::pair<double,double>> jet_vis_vecs;       // (vis_px, vis_py) per passing jet
-    std::vector<int> jet_inv_counts;                          // dark particle count per passing jet
+    std::vector<std::pair<double,double>> jet_axes;           // (eta, phi) of visible jet axis per passing jet
+    std::vector<int> jet_inv_counts;                          // dark particle count per passing jet (geometric)
     int lead_vis_idx = 0;
 
     for (const auto& jet : raw_jets) {
@@ -334,9 +357,21 @@ static void runWorker(int workerID, int nEvtWorker,
       ++n_jets;
 
       jet_vis_vecs.emplace_back(vis_px, vis_py);
+      jet_axes.emplace_back(jet.eta(), jet.phi());
+      // Count dark pions/rhos (TAG_DARK) within this jet's cone via geometric
+      // matching — jet.constituents() no longer contains invisible particles.
       int n_dark = 0;
-      for (const auto& c : jet.constituents())
-        if (c.user_index() == TAG_DARK) ++n_dark;
+      {
+        double ja_eta = jet.eta(), ja_phi = jet.phi();
+        for (const auto& ip : invis_ptcls) {
+          if (ip.tag != TAG_DARK) continue;
+          double deta = ip.eta - ja_eta;
+          double dphi = ip.phi - ja_phi;
+          if (dphi >  PI) dphi -= 2*PI;
+          if (dphi < -PI) dphi += 2*PI;
+          if (std::sqrt(deta*deta + dphi*dphi) < jetR) ++n_dark;
+        }
+      }
       jet_inv_counts.push_back(n_dark);
 
       // Accumulate all visible constituents for event-level hemisphere masses
@@ -387,6 +422,13 @@ static void runWorker(int workerID, int nEvtWorker,
 
     double met     = std::sqrt(evt_vis_px*evt_vis_px + evt_vis_py*evt_vis_py);
     double met_phi = std::atan2(-evt_vis_py, -evt_vis_px);
+
+    // ── H_T, R_T, M_eff ──────────────────────────────────────────────────────
+    double HT = 0.0;
+    for (const auto& jvv : jet_vis_vecs)
+      HT += std::sqrt(jvv.first*jvv.first + jvv.second*jvv.second);
+    double RT   = (HT > 0) ? met / HT : 0.0;
+    double Meff = HT + met;
 
     // ── Transverse sphericity S_T = 2*lambda_min of the 2x2 sphericity tensor ──
     // Tensor S^{ab} = sum(p_a*p_b) / sum(pT^2), trace = 1, so S_T = 2*lambda_min.
@@ -513,6 +555,24 @@ static void runWorker(int workerID, int nEvtWorker,
     if (n_jets >= 1) {
       close_jet_is_lead = (close_idx == lead_vis_idx) ? 1.0 : 0.0;
       n_inv_close       = (double)jet_inv_counts[close_idx];
+    }
+
+    // ── f_inv: invisible pT fraction of leading jet (geometric matching) ──────
+    // Sums pT of all invisible particles (neutrinos + dark) within the leading
+    // jet's cone; denominator is the full jet pT (vis + invisible).
+    double f_inv = 0.0;
+    if (n_jets >= 1) {
+      double la_eta = jet_axes[lead_vis_idx].first;
+      double la_phi = jet_axes[lead_vis_idx].second;
+      double inv_pt = 0.0;
+      for (const auto& ip : invis_ptcls) {
+        double deta = ip.eta - la_eta;
+        double dphi = ip.phi - la_phi;
+        if (dphi >  PI) dphi -= 2*PI;
+        if (dphi < -PI) dphi += 2*PI;
+        if (std::sqrt(deta*deta + dphi*dphi) < jetR) inv_pt += ip.pt;
+      }
+      f_inv = (lead_vis_pt + inv_pt > 0) ? inv_pt / (lead_vis_pt + inv_pt) : 0.0;
     }
 
     // ── Energy Correlators and N-subjettiness (leading visible-pT jet) ──
@@ -684,6 +744,19 @@ static void runWorker(int workerID, int nEvtWorker,
       }
     }
 
+    // ── Leading jet invariant mass and constituent multiplicity ──────────────
+    double lead_jet_mass = 0.0;
+    double n_const       = 0.0;
+    if (!lead_constits.empty()) {
+      double mpx = 0, mpy = 0, mpz = 0, mE = 0;
+      for (const auto& c : lead_constits) {
+        mpx += c[0]; mpy += c[1]; mpz += c[2]; mE += c[3];
+      }
+      double m2 = mE*mE - mpx*mpx - mpy*mpy - mpz*mpz;
+      lead_jet_mass = (m2 > 0) ? std::sqrt(m2) : 0.0;
+      n_const = (double)lead_constits.size();
+    }
+
     // ADD NEW OBSERVABLE COMPUTATIONS ABOVE THIS LINE, then append to push_back below.
     // Keep push_back values in the same order as OBS_NAMES.
     data.push_back({lead_vis_pt, lead_width, met,
@@ -692,7 +765,9 @@ static void runWorker(int workerID, int nEvtWorker,
                     pt_bal, dphi_met_dijet,
                     e2c, e3c, tau1, tau2, tau3,
                     dphi_met_close, dphi_met_far, (double)n_jets,
-                    close_jet_is_lead, n_inv_close, met_phi});
+                    close_jet_is_lead, n_inv_close, met_phi,
+                    HT, RT, Meff,
+                    lead_jet_mass, n_const, f_inv});
     jetData.push_back({n_jets,
                        j1_px, j1_py, j1_pz, j1_E,
                        j2_px, j2_py, j2_pz, j2_E});

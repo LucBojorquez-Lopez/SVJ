@@ -182,7 +182,17 @@ def plot_observable_transforms(
             ax.hist(y_std, bins=bins, density=True,
                     alpha=0.9, color='seagreen', histtype='step', linewidth=1.2)
             xn = np.linspace(-4, 4, 400)
-            ax.plot(xn, st.norm.pdf(xn), 'k--', lw=1.5, label='N(0,1)')
+            # Chi-squared goodness-of-fit to N(0,1) using the histogram binning.
+            # No free parameters (testing against fixed N(0,1)), so dof = n_bins - 1.
+            _edges = np.linspace(y_std.min(), y_std.max(), bins + 1)
+            _obs   = np.histogram(y_std, bins=_edges)[0].astype(float)
+            _exp   = np.diff(st.norm.cdf(_edges)) * len(y_std)
+            _good  = _exp > 0
+            _chi2  = float(np.sum((_obs[_good] - _exp[_good])**2 / _exp[_good]))
+            _dof   = int(_good.sum()) - 1
+            _p     = float(st.chi2.sf(_chi2, df=_dof))
+            norm_label = rf'N(0,1)   $\chi^2$/dof={_chi2/_dof:.2f}   p={_p:.3f}'
+            ax.plot(xn, st.norm.pdf(xn), 'k--', lw=1.5, label=norm_label)
             ax.set_title('Standard-normal mapped', fontsize=10)
             ax.set_xlabel('z', fontsize=10)
             ax.legend(fontsize=8, framealpha=0.6)

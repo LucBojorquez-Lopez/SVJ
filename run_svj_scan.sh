@@ -5,7 +5,7 @@
 #SBATCH -c 16
 #SBATCH -p arguelles_delgado
 #SBATCH --mem=1G
-#SBATCH -t 0-0:10
+#SBATCH -t 0-10:00
 #SBATCH --output=logs/svj_%A_%a.out
 #SBATCH --error=logs/svj_%A_%a.err
 #SBATCH --mail-type=END,FAIL

@@ -84,7 +84,12 @@ def _abs_fwd(x, params):
     return np.abs(x)
 
 def _abs_inv(y, params):
-    # Assumes y >= 0; sign information is lost.
+    # Reconstruct the signed distribution by alternating signs.
+    # Valid only when the underlying signed distribution is symmetric around 0
+    # (sign and |y| are independent), which holds for all angular observables
+    # currently using this transform.  Do not use for asymmetric quantities.
+    y = np.asarray(y, dtype=float).copy()
+    y[1::2] *= -1.0
     return y
 
 def _boxcox_fit(x):
@@ -97,8 +102,26 @@ def _boxcox_fwd(x, params):
 def _boxcox_inv(y, params):
     return sp.inv_boxcox(y, params[0])
 
+def _identity_fit(x):
+    return np.asarray(x, dtype=float).copy(), ()
+
+def _identity_fwd(x, params):
+    return np.asarray(x, dtype=float).copy()
+
+def _identity_inv(y, params):
+    return np.asarray(y, dtype=float).copy()
+
 
 TRANSFORMS = {
+    # ── Identity / no-op  (use to inspect raw distributions) ────────────────
+    'identity': {
+        'fit':      _identity_fit,
+        'forward':  _identity_fwd,
+        'inverse':  _identity_inv,
+        'n_fitted': 0,
+        'requires': None,
+        'desc':     'Identity (no-op).  Use pipeline=[("identity",{})] to inspect raw distributions.',
+    },
     # ── a − x  (default a=1, giving the 1-thrust flip) ──────────────────────
     'affine_flip': {
         'fit':      _affine_flip_fit,
@@ -117,14 +140,17 @@ TRANSFORMS = {
         'requires': lambda: (0.0, np.inf),
         'desc':     'log(x)  (requires x > 0)',
     },
-    # ── absolute value  (non-invertible; loses sign) ─────────────────────────
+    # ── absolute value  (invertible under symmetry assumption) ──────────────
+    # The inverse alternates signs on the sample array.  Only correct when the
+    # signed distribution is symmetric around 0 (sign ⊥ |x|).  True for all
+    # angular observables currently using this transform.
     'abs_value': {
         'fit':      _abs_fit,
         'forward':  _abs_fwd,
         'inverse':  _abs_inv,
         'n_fitted': 0,
         'requires': None,
-        'desc':     '|x|  (non-invertible; use for signed angles)',
+        'desc':     '|x|  (inverse alternates signs; assumes symmetric signed distribution)',
     },
     # ── Box–Cox power transform  (lambda fitted from data) ───────────────────
     'boxcox': {
@@ -386,11 +412,12 @@ OBSERVABLES = {
 
     # ── dPhiMETclose: signed Δφ(closest jet to MET, MET) ─────────────────────
     # Signed angle ∈ (−π, π]; abs_value maps to [0, π), then boxcox.
+    # Symmetric around 0, so abs_value inverse (alternating signs) is valid.
     'dPhiMETclose': {
         'col':             'dPhiMETclose',
-        'pipeline':        [('abs_value', {}), ('boxcox', {})],
+        'pipeline':        [('abs_value', {}),('boxcox', {})],
         'distribution':    'gennorm',
-        'default_include': False,
+        'default_include': True,
         'label':           r'$|\Delta\phi|$(MET, close jet)',
         'desc':            'Signed Δφ(MET, closest jet); abs_value applied first.  Can be 0.',
     },
@@ -448,6 +475,68 @@ OBSERVABLES = {
         'default_include': False,
         'label':           r'$|\phi_\mathrm{MET}|$',
         'desc':            'MET azimuthal angle; abs_value first.  φ=0 events discarded.',
+    },
+
+    # ── HT: scalar pT sum of all passing jets ─────────────────────────────────
+    'HT': {
+        'col':             'HT',
+        'pipeline':        [('boxcox', {})],
+        'distribution':    'gennorm',
+        'default_include': True,
+        'label':           r'$H_T$ (GeV)',
+        'desc':            'Scalar sum of visible pT of all jets passing selection.',
+    },
+
+    # ── RT: MET / HT ──────────────────────────────────────────────────────────
+    'RT': {
+        'col':             'RT',
+        'pipeline':        [('identity', {})],
+        'distribution':    'gennorm',
+        'default_include': False,
+        'label':           r'$R_T$',
+        'desc':            'MET / H_T; key SVJ discriminant (Cohen et al. 2015).',
+    },
+
+    # ── Meff: effective mass ───────────────────────────────────────────────────
+    'Meff': {
+        'col':             'Meff',
+        'pipeline':        [('boxcox', {})],
+        'distribution':    'gennorm',
+        'default_include': True,
+        'label':           r'$M_\mathrm{eff}$ (GeV)',
+        'desc':            'Effective mass: H_T + MET.',
+    },
+
+    # ── leadJetMass: leading jet invariant mass (visible+muon constituents) ───
+    'leadJetMass': {
+        'col':             'leadJetMass',
+        'pipeline':        [('boxcox', {})],
+        'distribution':    'gennorm',
+        'default_include': True,
+        'label':           r'Lead jet mass (GeV)',
+        'desc':            'Invariant mass of visible+muon constituents of the leading jet.',
+    },
+
+    # ── nConst: visible+muon constituent multiplicity of leading jet ───────────
+    'nConst': {
+        'col':             'nConst',
+        'pipeline':        [('boxcox', {})],
+        'distribution':    'gennorm',
+        'default_include': True,
+        'label':           r'$N_\mathrm{const}$',
+        'desc':            'Visible+muon constituent multiplicity of the leading jet.',
+    },
+
+    # ── fInv: invisible pT fraction of leading jet ────────────────────────────
+    # Invisible = neutrinos + dark pions/rhos, matched geometrically (ΔR < jetR)
+    # to the visible-only jet axis.  fInv = inv_pT / (vis_pT + inv_pT).
+    'fInv': {
+        'col':             'fInv',
+        'pipeline':        [('identity', {})],
+        'distribution':    'gennorm',
+        'default_include': False,
+        'label':           r'$f_\mathrm{inv}$',
+        'desc':            'Invisible pT fraction of leading jet: (ν + dark pT) / total leading jet pT.',
     },
 
     # ── Derived: hemiMass2 / hemiMass1 ────────────────────────────────────────
