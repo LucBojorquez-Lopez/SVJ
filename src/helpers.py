@@ -30,8 +30,9 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 # Lazy-loaded NPZ data
 # ══════════════════════════════════════════════════════════════════════════════
 
-_v1_data  = None   # v1 regression_scan.npz
-_svj_data = None   # svj_scan.npz
+_v1_data      = None   # v1 regression_scan.npz
+_svj_data     = None   # svj_scan.npz
+_svj_scan_path = None  # override path (None → default simulated/svj/svj_scan.npz)
 
 
 def _load_v1():
@@ -47,10 +48,29 @@ def _load_v1():
     return _v1_data
 
 
+def set_svj_scan_path(path):
+    """
+    Override the default SVJ scan NPZ path and clear all cached data so the
+    next interpolation call reloads from the new location.
+
+    Parameters
+    ----------
+    path : str | Path | None
+        Path to svj_scan.npz.  Pass None to restore the default
+        (simulated/svj/svj_scan.npz relative to the repo root).
+    """
+    global _svj_scan_path, _svj_data, _svj_interp, _svj_meta
+    _svj_scan_path = Path(path) if path is not None else None
+    _svj_data   = None
+    _svj_interp = None
+    _svj_meta   = {}
+
+
 def _load_svj():
     global _svj_data
     if _svj_data is None:
-        path = _REPO_ROOT / 'simulated/svj/svj_scan.npz'
+        path = _svj_scan_path if _svj_scan_path is not None \
+               else _REPO_ROOT / 'simulated/svj/svj_scan.npz'
         try:
             _svj_data = np.load(path, allow_pickle=True)
         except FileNotFoundError:

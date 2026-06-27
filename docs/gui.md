@@ -31,12 +31,21 @@ Moving any physics slider clears the validation overlay (since the true data is 
 ## `show()` arguments
 
 ```python
-show(n_samples=10_000)
+show(n_samples=10_000, scan_dir=None)
 ```
 
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `n_samples` | 10 000 | Initial number of model samples per draw |
+| `scan_dir` | None | Path to a directory containing `svj_scan.npz` and `svj_scan_meta.json`. When `None`, the default `simulated/svj/` directory is used. |
+
+To load a scan from a custom location:
+
+```python
+show(scan_dir='path/to/my_scan/')
+```
+
+Both `svj_scan.npz` and `svj_scan_meta.json` must be present in that directory.
 
 ## Observable coverage
 

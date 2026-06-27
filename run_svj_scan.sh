@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=svj_scan
-#SBATCH --array=0-15                   # 4 parallel slices; must match N_JOBS below
+#SBATCH --array=0-15                   # 16 parallel slices; must match N_JOBS below
 #SBATCH --nodes=1
 #SBATCH -c 16
 #SBATCH -p arguelles_delgado
-#SBATCH --mem=3G
-#SBATCH -t 0-5:00
+#SBATCH --mem=1G
+#SBATCH -t 0-0:10
 #SBATCH --output=logs/svj_%A_%a.out
 #SBATCH --error=logs/svj_%A_%a.err
 #SBATCH --mail-type=END,FAIL

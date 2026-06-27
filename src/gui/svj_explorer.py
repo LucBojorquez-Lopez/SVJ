@@ -54,29 +54,32 @@ _PARAM_STEPS = {
     'rinv_pion': 0.01, 'rinv_rho': 0.01,
     'alphaD': 0.01, 'Brmu': 0.01,
     'jetR': 0.1, 'mPi': 0.1, 'LambdaDQCD': 0.1,
+    'mPiOverLambda': 0.02,
 }
 
 # Human-readable slider descriptions
 _PARAM_LABELS = {
-    'mZ':        "mZ' (GeV)",
-    'mRho':      'mRho (GeV)',
-    'mPi':       'mPi (GeV)',
-    'mq':        'mq (GeV)',
-    'rinv_pion': 'rinv_pion',
-    'rinv_rho':  'rinv_rho',
-    'alphaD':    'alphaD',
-    'Brmu':      'Brmu',
-    'jetR':      'jetR',
-    'LambdaDQCD': 'ΛD (GeV)',
+    'mZ':            "mZ' (GeV)",
+    'mRho':          'mRho (GeV)',
+    'mPi':           'mPi (GeV)',
+    'mq':            'mq (GeV)',
+    'rinv_pion':     'rinv_pion',
+    'rinv_rho':      'rinv_rho',
+    'alphaD':        'alphaD',
+    'Brmu':          'Brmu',
+    'jetR':          'jetR',
+    'LambdaDQCD':    'ΛD (GeV)',
+    'mPiOverLambda': 'mπ/ΛD',
 }
 
 # Fallback derived-param expressions and fixed params used when no meta JSON exists
 _DEFAULT_DERIVED = {
-    'mPi':        'mRho * (8.0 / 15.5)',
-    'LambdaDQCD': 'mRho * (5.0 / 15.5)',
-    'rinv_rho':   'rinv_pion',
+    'mq':      'LambdaDQCD * (mPiOverLambda / 5.5) ** 2',
+    'mPi':     'mPiOverLambda * LambdaDQCD',
+    'mRho':    'LambdaDQCD * (5.76 + 1.5 * mPiOverLambda ** 2) ** 0.5',
+    'rinv_rho': 'rinv_pion',
 }
-_DEFAULT_FIXED = {'mq': 4.0, 'Brmu': 0.3, 'jetR': 1.0}
+_DEFAULT_FIXED = {'Brmu': 0.3, 'jetR': 1.0}
 
 
 # ── Scan meta loader ──────────────────────────────────────────────────────────
@@ -331,7 +334,7 @@ _FIXED_RANGES = _compute_fixed_ranges()
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
-def show(n_samples=10_000):
+def show(n_samples=10_000, scan_dir=None):
     """
     Launch the two-feature SVJ parameter explorer.
 
@@ -344,7 +347,26 @@ def show(n_samples=10_000):
     ----------
     n_samples : int
         Number of model samples to draw per update (default 10 000).
+    scan_dir : str | Path | None
+        Directory that contains svj_scan.npz and svj_scan_meta.json.
+        When None (default) the standard simulated/svj/ directory is used.
     """
+    global _META_PATH
+    global _BASE_OBS, _OBS_NAMES, _OBS_LABELS, _NAME_TO_ARR
+    global _N_BASE, _N_OBS, _IDX_MASS1, _IDX_MASS2, _IDX_MRAT, _FIXED_RANGES
+
+    if scan_dir is not None:
+        scan_dir = Path(scan_dir)
+        helpers.set_svj_scan_path(scan_dir / 'svj_scan.npz')
+        _META_PATH = scan_dir / 'svj_scan_meta.json'
+        _BASE_OBS, _OBS_NAMES, _OBS_LABELS, _NAME_TO_ARR = _build_obs_list()
+        _N_BASE = len(_BASE_OBS)
+        _N_OBS  = len(_OBS_NAMES)
+        _IDX_MASS1 = _OBS_NAMES.index('hemiMass1')   if 'hemiMass1'   in _OBS_NAMES else None
+        _IDX_MASS2 = _OBS_NAMES.index('hemiMass2')   if 'hemiMass2'   in _OBS_NAMES else None
+        _IDX_MRAT  = _OBS_NAMES.index('mass2/mass1') if 'mass2/mass1' in _OBS_NAMES else None
+        _FIXED_RANGES = _compute_fixed_ranges()
+
     display(HTML("""
     <style>
     .widget-label, .widget-readout,
