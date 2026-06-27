@@ -12,23 +12,24 @@ exactly one of three zones:
 [scan]
 # axes of the N-D grid; format: name = min, max, n[, spacing]
 # spacing = linear (default) or log
-mZ        = 500, 4000, 8
-mRho      = 10, 30, 8
-rinv_pion = 0.05, 0.70, 8
-alphaD    = 0.10, 0.80, 8
+mZ            = 500, 4000, 8, log
+rinv_pion     = 0.05, 0.70, 8
+mPiOverLambda = 0.0, 2.0, 8        # dimensionless ratio mPi / LambdaDQCD
+LambdaDQCD    = 2.0, 15.0, 8       # dark QCD confinement scale (GeV)
+alphaD        = 0.10, 0.80, 8
 
 [fixed]
 # constant at every grid point
-mq   = 4.0
 Brmu = 0.3
 jetR = 1.0
 
 [derived]
 # arithmetic expressions evaluated from scan+fixed values at each point
-# Only +, -, *, / and parentheses are allowed (no imports or builtins)
-mPi        = mRho * (8.0 / 15.5)
-LambdaDQCD = mRho * (5.0 / 15.5)
-rinv_rho   = rinv_pion              # tie dark-rho BR to dark-pion BR
+# Operators +, -, *, /, ** and parentheses are supported (no imports or builtins)
+mq       = LambdaDQCD * (mPiOverLambda / 5.5) ** 2
+mPi      = mPiOverLambda * LambdaDQCD
+mRho     = LambdaDQCD * (5.76 + 1.5 * mPiOverLambda ** 2) ** 0.5
+rinv_rho = rinv_pion              # tie dark-rho BR to dark-pion BR
 
 [simulation]
 nEvent           = 50000   # events per grid point
