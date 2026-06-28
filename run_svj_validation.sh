@@ -13,7 +13,7 @@
 # Parameters per task
 # -------------------
 #   N1  = 50000   model samples drawn from the interpolation
-#   N2  = 20000   PYTHIA events per run per validation point (3 runs/point)
+#   N2  = 5000   PYTHIA events per run per validation point (3 runs/point)
 #   N3  = 125     validation points per task  (16 × 125 = 2000 total)
 #   n-workers = 16    parallel workers within each task
 #   n-mmd     = 2000  MMD subsample size
@@ -23,8 +23,8 @@
 #SBATCH --nodes=1
 #SBATCH -c 16                          # CPUs per task; matches --n-workers
 #SBATCH -p arguelles_delgado
-#SBATCH --mem=2G
-#SBATCH -t 0-10:00                     # 24 h ceiling; expected ~18 h per task
+#SBATCH --mem=1G
+#SBATCH -t 0-2:00                     # 24 h ceiling; expected ~18 h per task
 #SBATCH --output=logs/svj_val_%A_%a.out
 #SBATCH --error=logs/svj_val_%A_%a.err
 #SBATCH --mail-type=END,FAIL
