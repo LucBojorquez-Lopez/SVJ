@@ -23,7 +23,7 @@
 #SBATCH --nodes=1
 #SBATCH -c 16                          # CPUs per task; matches --n-workers
 #SBATCH -p arguelles_delgado
-#SBATCH --mem=1G
+#SBATCH --mem=2G
 #SBATCH -t 0-2:00                     # 24 h ceiling; expected ~18 h per task
 #SBATCH --output=logs/svj_val_%A_%a.out
 #SBATCH --error=logs/svj_val_%A_%a.err
