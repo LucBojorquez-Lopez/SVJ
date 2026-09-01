@@ -82,7 +82,8 @@ show()
 ```
 SVJ/
 ├── Makefile                       make svj_regression | check-deps | clean
-├── setup_env.sh                   lxplus environment: LCG view + build vars
+├── setup_env.sh                   lxplus environment: deps, paths, Condor vars
+├── tools/build_deps.sh            Build PYTHIA + FastJet into $SVJ_WORK
 ├── merge_svj_tsv.sh               Merge per-job TSV shards after condor/tsv.sub
 ├── merge_svj_validation.py        Merge per-task NPZs after condor/validation.sub
 ├── condor/                        HTCondor submit files (see docs/lxplus.md)

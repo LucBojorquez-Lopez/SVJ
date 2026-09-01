@@ -174,18 +174,19 @@ MB and are reproducible from the binary plus a cfg.
 
 ## Running on CERN lxplus
 
-Everything above describes a generic Linux box, where you install PYTHIA and
-FastJet yourself. **On lxplus you do not** — a single LCG view on CVMFS
-provides PYTHIA 8.317, FastJet 3.5.1, gcc 13 and the whole Python stack, so
-§2, §3 and §4 above collapse into one line:
+Everything above describes a generic Linux box. On lxplus, §2 and §3 are
+automated and §4 is unchanged:
 
 ```bash
+source setup_env.sh
+bash tools/build_deps.sh   # PYTHIA + FastJet into $SVJ_WORK, ~20 min
 source setup_env.sh
 make svj_regression
 ```
 
-That matters beyond convenience: a default CERN account has a 2 GB AFS home and
-no `/afs/cern.ch/work` volume, and the source builds need several GB.
+The Python environment in §4 above is not needed there — it comes from an LCG
+view on CVMFS, which also serves as a working fallback for PYTHIA and FastJet
+if you skip `build_deps.sh` entirely.
 
 lxplus also needs decisions about where the clone lives, and HTCondor rather
 than SLURM — including the non-obvious rules for an EOS-resident repository

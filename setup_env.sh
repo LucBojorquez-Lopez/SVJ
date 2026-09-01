@@ -9,11 +9,12 @@
 #
 # condor/svj_job.sh sources it automatically via $SVJ_ENV.
 #
-# Everything the project needs — g++ 13, Python 3.13, numpy/scipy/matplotlib,
-# PYTHIA 8.317 and FastJet 3.5.1 — comes from a single LCG view on CVMFS.
-# Nothing is built into AFS or EOS, which matters here: this account has no
-# /afs/cern.ch/work volume and only ~1 GB free in its 2 GB AFS home, whereas
-# source-building PYTHIA + FastJet needs several GB.  See docs/lxplus.md.
+# Python, and the compiler used for anything not covered below, come from a
+# single LCG view on CVMFS — this account has no /afs/cern.ch/work volume and
+# ~1 GB free in its 2 GB AFS home, so a self-built Python stack is not on.
+#
+# PYTHIA and FastJet are our own builds under $SVJ_WORK on EOS, compiled with
+# the system gcc, with the view as a fallback.  See docs/lxplus.md §2.
 
 LCG_VIEW="${LCG_VIEW:-/cvmfs/sft.cern.ch/lcg/views/LCG_110/x86_64-el9-gcc13-opt}"
 
@@ -34,25 +35,59 @@ source "$LCG_VIEW/setup.sh"
 case "$_svj_flags" in *u*) set -u ;; esac
 unset _svj_flags
 
-# The Makefile wants a PYTHIA prefix with lib/libpythia8.so and a FastJet
-# prefix with bin/fastjet-config.  The view is a single prefix providing both.
-export PYTHIA_DIR="$LCG_VIEW"
-export FASTJET_DIR="$LCG_VIEW"
-
-# Extra rpath baked into the binary at link time.  GZIP_LIB is otherwise only
-# set by PYTHIA's own examples/Makefile.inc, which a view install does not
-# ship, so the Makefile appends this to the link line untouched — no Makefile
-# edit needed.  Without it the binary resolves libstdc++ against EL9's system
-# copy, which is gcc-11-era and fails with `GLIBCXX_3.4.31 not found`.
-SVJ_GCC_LIB="$(readlink -f "$(dirname "$(g++ -print-file-name=libstdc++.so)")" 2>/dev/null)"
-if [[ -n "$SVJ_GCC_LIB" && -d "$SVJ_GCC_LIB" ]]; then
-    export GZIP_LIB="-Wl,-rpath,$SVJ_GCC_LIB"
-fi
-unset SVJ_GCC_LIB
-
 # This file lives at the repository root, so its own directory is the repo.
 SVJ_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export SVJ_REPO
+
+# ── PYTHIA and FastJet ───────────────────────────────────────────────────────
+#
+# The Makefile wants a PYTHIA prefix with lib/libpythia8.so and a FastJet
+# prefix with bin/fastjet-config.  Two sources can provide those:
+#
+#   1. Our own builds under $SVJ_WORK, compiled with the SYSTEM gcc.  Preferred.
+#      A binary built against these depends on nothing from CVMFS, so it keeps
+#      working when an LCG view is retired — and PYTHIA is ours to patch.
+#   2. The LCG view, which happens to ship exactly 8.317 and 3.5.1.  Fallback,
+#      so a missing or half-finished local build degrades instead of blocking.
+#
+# Build the local copies with tools/build_deps.sh.
+export SVJ_WORK="${SVJ_WORK:-$(dirname "$SVJ_REPO")/svj-work}"
+
+# Globbed rather than pinned to pythia8317, so bumping PYTHIA_VER in
+# tools/build_deps.sh does not silently drop you back to the view.  The glob
+# sorts, so the last match is the highest version present.
+_svj_pythia=""
+for _svj_d in "$SVJ_WORK"/pythia8*/; do
+    [[ -f "$_svj_d/lib/libpythia8.so" ]] && _svj_pythia="${_svj_d%/}"
+done
+
+if [[ -n "$_svj_pythia" && -x "$SVJ_WORK/fastjet3/bin/fastjet-config" ]]; then
+    export PYTHIA_DIR="$_svj_pythia"
+    export FASTJET_DIR="$SVJ_WORK/fastjet3"
+    # Must override the view's value: PYTHIA reads its settings from whichever
+    # xmldoc this points at, and silently using another install's is a subtle
+    # way to run a different physics configuration than you think.
+    export PYTHIA8DATA="$PYTHIA_DIR/share/Pythia8/xmldoc"
+    export SVJ_DEPS=local
+    # No rpath needed: the Makefile picks up CXX=/usr/bin/g++ from this
+    # PYTHIA's examples/Makefile.inc, so the binary links the system libstdc++
+    # that is already present on every worker node.
+    unset GZIP_LIB
+else
+    export PYTHIA_DIR="$LCG_VIEW"
+    export FASTJET_DIR="$LCG_VIEW"
+    export SVJ_DEPS=lcg
+    # A view install ships no examples/Makefile.inc, so the Makefile takes CXX
+    # from PATH — the view's gcc 13 — and GZIP_LIB stays free for us to use as
+    # an extra rpath.  Without it the binary resolves libstdc++ against EL9's
+    # gcc-11-era system copy and dies with `GLIBCXX_3.4.31 not found`.
+    SVJ_GCC_LIB="$(readlink -f "$(dirname "$(g++ -print-file-name=libstdc++.so)")" 2>/dev/null)"
+    if [[ -n "$SVJ_GCC_LIB" && -d "$SVJ_GCC_LIB" ]]; then
+        export GZIP_LIB="-Wl,-rpath,$SVJ_GCC_LIB"
+    fi
+    unset SVJ_GCC_LIB
+fi
+unset _svj_pythia _svj_d
 
 # An autoloaded pytest plugin in the view emits CDash <DartMeasurement> XML for
 # every test, burying the summary line in thousands of lines of markup.

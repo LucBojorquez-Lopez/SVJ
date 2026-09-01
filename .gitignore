@@ -1,6 +1,10 @@
 # Build products
 src/generate_events/svj_regression
 
+# Locally built PYTHIA / FastJet, if $SVJ_WORK is placed inside a clone.
+# The default is a sibling of the repo, so this is belt-and-braces.
+svj-work/
+
 # Notebooks — the GUI is driven from a scratch notebook per user
 *.ipynb
 

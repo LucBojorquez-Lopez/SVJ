@@ -29,8 +29,8 @@ rebuild**.
 | Validation NPZs | ✅ committed | — |
 | Python analysis code, tests, docs | ✅ | — |
 | `Makefile` | ✅ tracked | — |
-| **PYTHIA 8.317** | ❌ | **no** — comes from CVMFS (§2) |
-| **FastJet 3.5.1** | ❌ | **no** — comes from CVMFS (§2) |
+| **PYTHIA 8.317** | ❌ | yes — `tools/build_deps.sh`, ~20 min (§2) |
+| **FastJet 3.5.1** | ❌ | yes — same script, ~2 min (§2) |
 | Python environment | ❌ | **no** — comes from CVMFS (§2) |
 | **`svj_regression` binary** | ❌ gitignored | yes — one 4-second `make` (§4) |
 | Raw TSVs (`simulated/tsv/*.tsv`) | ❌ gitignored | regenerate as needed |
@@ -48,83 +48,92 @@ anywhere else.
 
 ## 2. Environment
 
-Everything comes from one LCG view on CVMFS. Source `setup_env.sh` at the
-repository root and you are done:
-
 ```bash
 source setup_env.sh
 ```
 
-That is the whole setup. Put it in your `.bashrc` if you like; **every** shell
-and **every** batch job needs it.
+That is the whole setup for an existing checkout. It reports which PYTHIA and
+FastJet it selected via `$SVJ_DEPS`.
 
-### Why there is nothing to build
+### Where each piece comes from
 
-`LCG_110/x86_64-el9-gcc13-opt` ships **PYTHIA 8.317** and **FastJet 3.5.1** —
-precisely the versions this project targets — along with gcc 13.1, Python 3.13,
-numpy, scipy, matplotlib, tqdm, pytest, ipywidgets, ipympl and jupyterlab. So
-there is no PYTHIA build, no FastJet build, and no venv.
-
-This is not merely convenient. Source-building PYTHIA and FastJet needs several
-GB, and on a default CERN account there is nowhere to put them: AFS home is a
-2 GB quota, and `/afs/cern.ch/work/<u>/<user>` **does not exist** until you
-request it through the CERN Resources portal. Earlier revisions of this guide
-told you to build into `$SVJ_WORK` on AFS work; on an account without that
-volume, that instruction cannot be followed. The CVMFS route sidesteps the
-question entirely and costs no quota at all.
-
-`setup_env.sh` sets, on top of the view:
-
-| Variable | Why |
+| Piece | Source |
 |---|---|
-| `PYTHIA_DIR`, `FASTJET_DIR` | both point at the view — it is a single prefix providing `lib/libpythia8.so` and `bin/fastjet-config`, which is all the `Makefile` asks for |
-| `GZIP_LIB` | an extra `-Wl,-rpath` to the view's gcc `lib64` (see §4) |
-| `SVJ_REPO` | the repo root; the `.sub` files read it via `$ENV(SVJ_REPO)` |
-| `X509_USER_PROXY` | `~/private/x509up` by default; the `.sub` files read it via `$ENV(...)` |
-| `PYTEST_DISABLE_PLUGIN_AUTOLOAD` | an autoloaded pytest plugin in the view otherwise emits CDash `<DartMeasurement>` XML for every test, burying the summary under thousands of lines of markup |
+| Python 3.13, numpy, scipy, matplotlib, tqdm, pytest, jupyter | LCG view on CVMFS |
+| PYTHIA 8.317, FastJet 3.5.1 | **our own builds** under `$SVJ_WORK`, with the LCG view as fallback |
+| Compiler for `svj_regression` | the **system** gcc when using our builds; the view's gcc 13 when falling back |
 
-To pin a different view, `export LCG_VIEW=...` before sourcing. List what is
-actually available rather than trusting a tag in a document — they come and go
-with lxplus releases:
+Python comes from CVMFS because a self-built stack is not worth it here: the
+system Python is 3.9, which is end-of-life and caps you at numpy 2.0.x /
+scipy 1.12.x (numpy 2.1+ and scipy 1.13+ both require 3.10), whereas the view
+gives 3.13 with numpy 2.4 and scipy 1.17. There is nowhere to build a newer
+Python either — this account has no `/afs/cern.ch/work` volume and ~1 GB free
+in its 2 GB AFS home.
+
+PYTHIA and FastJet are ours because they are the pieces you may actually want
+to modify — a Hidden Valley study is a plausible reason to patch PYTHIA — and
+because building them ourselves means the generator binary keeps working when
+an LCG view is retired.
+
+### Building PYTHIA and FastJet
+
+```bash
+source setup_env.sh
+bash tools/build_deps.sh      # ~20 min, mostly PYTHIA
+source setup_env.sh           # re-source: it now selects the local builds
+echo "$SVJ_DEPS"              # -> local
+```
+
+The script downloads both tarballs into `$SVJ_WORK` (cached, so a rebuild does
+not re-fetch), builds on local disk, prunes PYTHIA's object files, and copies
+the finished trees to EOS. Installed size is ~205 MB, not the several GB an
+unpruned in-place build suggests.
+
+Two choices inside it are deliberate:
+
+- **System gcc, not the view's.** A binary linked against these then needs
+  nothing from CVMFS. The repo `Makefile` follows automatically: it
+  `-include`s `$PYTHIA_DIR/examples/Makefile.inc`, which a source build writes
+  (`CXX=/usr/bin/g++`) and a CVMFS view does not ship at all.
+- **Build local, copy to EOS** — but configure with the *final* EOS prefix.
+  A direct build on EOS is many thousands of small compile-and-link writes,
+  the one workload EOS is bad at; copying a finished tree is what it is good
+  at. The trap is that both packages bake the configured prefix into their
+  output: `fastjet-config` reports it, the libtool `.la` files record it, and
+  `libpythia8.so` gets it as a compiled-in ELF `RPATH`. Configure with the
+  build directory and copy afterwards and you get a library whose `RPATH`
+  points into `/tmp` — fine on the machine that built it, broken on every
+  worker node, and invisible until a batch job fails. `build_deps.sh`
+  configures with the destination, stages FastJet through `DESTDIR`, and
+  asserts afterwards that no build-directory path survived.
+
+`-j4`, not `-j$(nproc)`: lxplus login nodes are shared and routinely sit above
+a load average of their core count.
+
+### The LCG view, and the fallback
+
+`setup_env.sh` falls back to the view when `$SVJ_WORK` has no usable build, so
+a fresh clone works before you build anything and a half-finished build
+degrades rather than blocks. The view happens to ship exactly PYTHIA 8.317 and
+FastJet 3.5.1 — the versions this project targets — so the fallback is a real
+one, not a token.
+
+To pin a different view, `export LCG_VIEW=...` before sourcing. List what
+exists rather than trusting a tag in a document:
 
 ```bash
 ls /cvmfs/sft.cern.ch/lcg/views/          # pick an LCG_* release
 ls /cvmfs/sft.cern.ch/lcg/views/LCG_110/  # pick a platform
 ```
 
-Any view you choose must provide both `lib/libpythia8.so` and
-`bin/fastjet-config`; `make check-deps` tells you in one second if it does not.
+A view used as fallback must provide `lib/libpythia8.so` and
+`bin/fastjet-config`; `make check-deps` says so in a second if it does not.
 
 > **One trap worth knowing about.** The view's own `setup.sh` reads `$COMPILER`
 > unguarded, so it aborts with `COMPILER: unbound variable` under `set -u`.
 > `condor/svj_job.sh` runs `set -euo pipefail`, which means a naive `source`
 > kills every batch job on that line. `setup_env.sh` shields the source and
 > restores the caller's flags afterwards, so callers need no special handling.
-
-### If the LCG view ever fails you
-
-Building from source still works and the `Makefile` still supports it — you just
-need somewhere with a few GB. Request an AFS work volume, or use an EOS
-directory, then:
-
-```bash
-export SVJ_WORK=/afs/cern.ch/work/${USER:0:1}/${USER}/svj    # once granted
-mkdir -p "$SVJ_WORK" && cd "$SVJ_WORK"
-
-wget https://pythia.org/download/pythia83/pythia8317.tgz
-tar xzf pythia8317.tgz && cd pythia8317 && ./configure && make -j4 && cd ..
-
-wget http://fastjet.fr/repo/fastjet-3.5.1.tar.gz
-tar xzf fastjet-3.5.1.tar.gz && cd fastjet-3.5.1
-./configure --prefix="$SVJ_WORK/fastjet3" && make -j4 install && cd ..
-
-export PYTHIA_DIR="$SVJ_WORK/pythia8317" FASTJET_DIR="$SVJ_WORK/fastjet3"
-```
-
-Use `-j4`, not `-j$(nproc)` — lxplus login nodes are shared and heavily
-parallel builds get throttled or killed. Expect 15–30 minutes for PYTHIA. Do
-this on AFS or local disk, **not** EOS: it is many thousands of small
-compile-and-link writes, which is the one workload EOS is genuinely bad at.
 
 ---
 
@@ -153,8 +162,11 @@ git clone https://github.com/LucBojorquez-Lopez/SVJ.git
 cd SVJ
 
 source setup_env.sh
-make check-deps        # confirms PYTHIA + FastJet are findable; builds nothing
-make svj_regression    # ~4 seconds
+bash tools/build_deps.sh   # PYTHIA + FastJet, ~20 min; skip to use the view
+source setup_env.sh        # re-source so it picks up the new builds
+
+make check-deps            # confirms both are findable; builds nothing
+make svj_regression        # ~4 seconds
 ```
 
 `PYTHIA_DIR` / `FASTJET_DIR` come from `setup_env.sh`, so plain
@@ -162,18 +174,36 @@ make svj_regression    # ~4 seconds
 paths and written into the binary's rpath, so the executable runs from any
 working directory.
 
-> **Why `GZIP_LIB` is in `setup_env.sh`.** The binary links against the view's
-> gcc-13 libraries, but the loader resolves `libstdc++` against EL9's system
-> copy, which is gcc-11-era — the binary then dies with
-> `GLIBCXX_3.4.31 not found`. `setup_env.sh` adds an rpath to the view's gcc
-> `lib64` to fix it. `GZIP_LIB` is otherwise only set by PYTHIA's own
-> `examples/Makefile.inc`, which a CVMFS view does not ship, so the `Makefile`
-> appends it to the link line untouched and needs no edit.
+Run `make clean && make svj_regression` after switching between local and view
+dependencies — the rpath is baked in at link time, so a stale binary keeps
+pointing at whichever install it was linked against.
+
+> **Where the compiler comes from, and why it differs by branch.**
 >
-> With that rpath the binary runs on nothing but `PYTHIA8DATA`. Without it, it
-> runs only while the view is sourced. Sourcing `setup_env.sh` is required for
-> Python regardless, so this is belt-and-braces — but it turns a confusing
-> runtime loader error into a non-issue.
+> With **local builds**, the `Makefile` picks up `CXX=/usr/bin/g++` from
+> `$PYTHIA_DIR/examples/Makefile.inc`, so the binary links the system
+> `libstdc++` that exists on every worker node. Nothing from CVMFS is needed at
+> runtime.
+>
+> With the **view**, there is no `Makefile.inc`, so `CXX` comes from `PATH` —
+> the view's gcc 13 — and the binary needs that gcc's `libstdc++`. EL9's system
+> copy is gcc-11-era and the binary dies with `GLIBCXX_3.4.31 not found`.
+> `setup_env.sh` handles this by passing an rpath through `GZIP_LIB`, a
+> variable only a source build's `Makefile.inc` would otherwise set — so the
+> `Makefile` needs no edit, and the local branch correctly leaves it unset.
+
+> **`ldd` will still show CVMFS, and that is fine.** Sourcing `setup_env.sh`
+> puts the view on `LD_LIBRARY_PATH` for Python's sake, so `libstdc++` and
+> `libgcc_s` resolve from CVMFS in that shell. That is a property of the shell,
+> not of the binary: `readelf -d` shows an RPATH containing only `$SVJ_WORK`
+> paths, and in a clean environment the same two libraries resolve from
+> `/lib64`. Both work — gcc 13's `libstdc++` is backward compatible with a
+> gcc-11-built binary. To check what the binary itself requires:
+>
+> ```bash
+> readelf -d src/generate_events/svj_regression | grep -E 'RPATH|NEEDED'
+> env -i PATH=/usr/bin:/bin ldd src/generate_events/svj_regression
+> ```
 
 ---
 
@@ -423,9 +453,13 @@ helpers.set_svj_scan_path('/eos/user/l/lbojorqu/svj/scans/svj_scan.npz')
 - There is no DAGMan file, so the merge step after each array is manual.
 - `sample_svj_new` returns NaN for a small fraction of draws; see the
   known-limitation section of [api.md](api.md).
-- `setup_env.sh` pins `LCG_110/x86_64-el9-gcc13-opt`. LCG views are eventually
-  removed from CVMFS; when that one goes, pick a newer view that still carries
-  pythia8 and fastjet and `export LCG_VIEW=...` (§2).
+- `setup_env.sh` pins `LCG_110/x86_64-el9-gcc13-opt` for Python. LCG views are
+  eventually removed from CVMFS; when that one goes, `export LCG_VIEW=...` to a
+  newer one (§2). With local PYTHIA/FastJet builds the C++ side is unaffected,
+  but the Python stack still follows the view.
+- `tools/build_deps.sh` pins PYTHIA 8317 and FastJet 3.5.1 in two shell
+  variables at the top. Bumping either is a one-line change plus a rebuild, but
+  nothing verifies that the repo's observable code still matches a new PYTHIA.
 - Writing job `.out`/`.err` to EOS is broken, not merely discouraged (§7.2). If
   a future lxplus release fixes it, the AFS split in `_common.inc` could be
   dropped — retest before assuming so.
