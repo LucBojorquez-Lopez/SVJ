@@ -31,3 +31,13 @@ simulated/svj/*_raw.npz
 simulated/tsv/report_figures/
 simulated/tsv/play_around/
 simulated_smoke/
+
+# Per-job validation shards from condor/validation.sub.  merge_svj_validation.py
+# folds these 16 x 125 points into simulated/svj/validation_production.npz, which
+# IS tracked -- the shards add nothing once merged.  Note the underscore: this
+# pattern deliberately cannot match the merged file itself.
+simulated/svj/validation_production_*.npz
+
+# Ad-hoc validate_fit.py outputs.  That script requires an explicit --out, so
+# these are always deliberate one-offs, not part of a working example.
+simulated/svj/validation_fit*.npz
