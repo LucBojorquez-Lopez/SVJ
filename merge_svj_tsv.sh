@@ -1,10 +1,10 @@
 #!/bin/bash
 # merge_svj_tsv.sh
-# Merge per-job TSV shards produced by run_svj_tsv.sh into the canonical
+# Merge per-job TSV shards produced by condor/tsv.sub into the canonical
 # simulated/tsv/jets_default.tsv (and jets_kinematics.tsv).
 #
 # Usage: bash merge_svj_tsv.sh <n_jobs> [--keep-shards]
-#   n_jobs        Number of shards to merge (must match N_JOBS in run_svj_tsv.sh).
+#   n_jobs        Number of shards to merge (must match `queue N` in condor/tsv.sub).
 #   --keep-shards Do not delete the per-job shard files after merging.
 #                 Default: shards are removed on success.
 

@@ -211,7 +211,9 @@ def run_pythia(full_params, n_events, seed_offset, task_tag):
 
     # See the note in scan_svj._worker: gettempdir() honours $TMPDIR so batch
     # jobs write to job-private scratch rather than a shared worker-node /tmp.
-    _uid     = os.environ.get('SLURM_ARRAY_TASK_ID') or str(os.getpid())
+    # $TMPDIR is job-private under Condor, so cross-job collisions are
+    # impossible; the pid is what separates concurrent workers within a job.
+    _uid     = str(os.getpid())
     _scratch = tempfile.gettempdir()
     cfg_path = os.path.join(_scratch, f'val_{_uid}_{task_tag}.cfg')
     tsv_path = os.path.join(_scratch, f'val_{_uid}_{task_tag}.tsv')

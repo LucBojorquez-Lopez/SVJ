@@ -1,32 +1,30 @@
 # condor/tsv.sub — batch TSV generation, 4 independent shards
 #
+#   source setup_env.sh
 #   condor_submit condor/tsv.sub
-#   bash merge_svj_tsv.sh 4            # after all done
+#   bash merge_svj_tsv.sh 4            # after all jobs finish
+#
+# Run condor/smoke.sub FIRST (docs/lxplus.md §7.3).
 #
 # Each shard gets a distinct seed_offset, so PYTHIA seeds never overlap.
 # Total events = queue N x nEvent (from svj_regression.cfg).
 # Set request_cpus to nWorkers in svj_regression.cfg.
-# Untested on lxplus — smoke-test per docs/lxplus.md §7.1.
+#
+# Shards land in simulated/tsv/ inside the repo — tens of MB each.  Redirect
+# tsv_file / tsv_kin_file in svj_regression.cfg for anything large
+# (docs/lxplus.md §8).
 
-universe                = vanilla
-executable              = condor/svj_job.sh
-arguments               = "tsv 4 $(ProcId)"
+include : condor/_common.inc
 
-output                  = logs/tsv_$(ClusterId)_$(ProcId).out
-error                   = logs/tsv_$(ClusterId)_$(ProcId).err
-log                     = logs/tsv_$(ClusterId).log
+arguments = "tsv 4 $(ProcId)"
 
-request_cpus            = 16
-request_memory          = 2 GB
-request_disk            = 8 GB
-+JobFlavour             = "longlunch"
+output = $(SVJ_AFS_DIR)/logs/tsv_$(ClusterId)_$(ProcId).out
+error  = $(SVJ_AFS_DIR)/logs/tsv_$(ClusterId)_$(ProcId).err
+log    = $(SVJ_AFS_DIR)/logs/tsv_$(ClusterId).log
 
-should_transfer_files   = NO
-getenv                  = True
-
-# Required if the repository lives on EOS: the worker node needs forwarded
-# credentials to read it.  Harmless otherwise.  Credential handling on lxplus
-# changes between releases — confirm in the smoke test (docs/lxplus.md §7.1).
-MY.SendCredential       = True
+request_cpus   = 16
+request_memory = 2 GB
+request_disk   = 8 GB
++JobFlavour    = "longlunch"
 
 queue 4

@@ -1,0 +1,30 @@
+# condor/smoke.sub — the mandatory single-job smoke test (docs/lxplus.md §7.3).
+#
+#   source setup_env.sh
+#   condor_submit condor/smoke.sub
+#   condor_q
+#   cat $SVJ_AFS/logs/smoke_*.err $SVJ_AFS/logs/smoke_*.out
+#
+# Runs the `scan` workflow over ONE grid point at 2000 events
+# (src/run_regression/scan_smoke.cfg), writing to simulated_smoke/svj/.
+# Finishes in under a minute, so espresso is ample.
+#
+# Submit this and read its log before ever submitting an array.  It is what
+# proves the parts no local test can: that a worker node can read the
+# EOS-resident repository, source setup_env.sh off EOS, and write back.
+
+include : condor/_common.inc
+
+arguments = "scan 1 $(ProcId)"
+environment = "SVJ_REPO=$(SVJ_REPO_DIR) SVJ_SCAN_CFG=src/run_regression/scan_smoke.cfg"
+
+output = $(SVJ_AFS_DIR)/logs/smoke_$(ClusterId)_$(ProcId).out
+error  = $(SVJ_AFS_DIR)/logs/smoke_$(ClusterId)_$(ProcId).err
+log    = $(SVJ_AFS_DIR)/logs/smoke_$(ClusterId).log
+
+request_cpus   = 1
+request_memory = 1 GB
+request_disk   = 1 GB
++JobFlavour    = "espresso"
+
+queue 1

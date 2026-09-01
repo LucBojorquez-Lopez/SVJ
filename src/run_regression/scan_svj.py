@@ -43,7 +43,7 @@ Resumption:
 Checkpointing:
   Results are saved every checkpoint_every completions.
 
-Merge mode (for SLURM array jobs):
+Merge mode (for Condor array jobs):
   python scan_svj.py --merge --n-jobs 4
 """
 
@@ -442,7 +442,7 @@ def main():
     parser.add_argument('--obs', type=str, default=None,
                         help='Comma-separated observable names (default: DEFAULT_SCAN)')
     parser.add_argument('--job-index', type=int, default=0,
-                        help='Index of this SLURM array job slice (0-based)')
+                        help='Index of this array job slice (0-based); Condor passes $(ProcId)')
     parser.add_argument('--n-jobs',    type=int, default=1,
                         help='Total number of parallel job slices')
     parser.add_argument('--merge', action='store_true',
@@ -457,9 +457,16 @@ def main():
     n_jobs    = args.n_jobs
     save_raw  = args.save_raw
 
-    out_dir = Path('simulated') / 'svj'
-
     if args.merge:
+        # Resolve output_dir exactly as the scan below does, so --merge looks
+        # where the shards were actually written.  This was hardcoded to
+        # 'simulated', which meant redirecting output_dir silently produced
+        # shards in one place and a merge that searched another.
+        merge_root = 'simulated'
+        if os.path.exists(args.cfg):
+            merge_root = str(read_scan_cfg(args.cfg).sim_params.get(
+                'output_dir', 'simulated'))
+        out_dir = Path(merge_root) / 'svj'
         out_dir.mkdir(parents=True, exist_ok=True)
         _merge(out_dir, n_jobs, keep_shards=args.keep_shards)
         return

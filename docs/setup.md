@@ -174,15 +174,25 @@ MB and are reproducible from the binary plus a cfg.
 
 ## Running on CERN lxplus
 
-lxplus needs decisions about where things live (AFS quota, or EOS — both
-supported), a compiler and Python from an LCG view, and HTCondor rather than
-SLURM. That is covered in its own guide, including exactly what ships in the
-clone versus what must be rebuilt:
+Everything above describes a generic Linux box, where you install PYTHIA and
+FastJet yourself. **On lxplus you do not** — a single LCG view on CVMFS
+provides PYTHIA 8.317, FastJet 3.5.1, gcc 13 and the whole Python stack, so
+§2, §3 and §4 above collapse into one line:
+
+```bash
+source setup_env.sh
+make svj_regression
+```
+
+That matters beyond convenience: a default CERN account has a 2 GB AFS home and
+no `/afs/cern.ch/work` volume, and the source builds need several GB.
+
+lxplus also needs decisions about where the clone lives, and HTCondor rather
+than SLURM — including the non-obvious rules for an EOS-resident repository
+that will otherwise waste an afternoon. All of that is in its own guide:
 
 **→ [lxplus.md](lxplus.md)**
 
-The short version: the scan NPZs are committed, so the API, GUI and validation
-plots work as soon as the clone finishes. You need PYTHIA, FastJet and the
-`svj_regression` build only to generate *new* events. Point the Makefile at
-your own installs with `PYTHIA_DIR` / `FASTJET_DIR` (§5 above), and use the
-submit files in [`condor/`](../condor/) instead of the SLURM scripts.
+The scan NPZs are committed, so the API, GUI and validation plots work as soon
+as the clone finishes. You need the `svj_regression` build only to generate
+*new* events.

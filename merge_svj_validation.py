@@ -2,7 +2,7 @@
 """
 merge_svj_validation.py
 =======================
-Merge the per-task NPZ shards produced by run_svj_validation.sh into a
+Merge the per-task NPZ shards produced by condor/validation.sub into a
 single validation_production.npz.
 
 Usage (from project root, after all array tasks finish):
@@ -30,7 +30,7 @@ for i in range(N_JOBS):
     print(f'  loaded shard {i}  ({int(shards[-1][1]["N3"])} points)')
 
 if not shards:
-    print('ERROR: no shards found. Run sbatch run_svj_validation.sh first.')
+    print('ERROR: no shards found. Run condor_submit condor/validation.sub first.')
     sys.exit(1)
 
 first = shards[0][1]

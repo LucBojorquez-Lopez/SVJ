@@ -125,50 +125,55 @@ python src/run_regression/scan_svj.py scan_regression.cfg \
 The observable names must match keys in the `OBSERVABLES` dict in `src/observables.py`,
 and each must have a non-`None` `pipeline` and `distribution`.
 
-## SLURM array jobs
+## Condor array jobs
 
-A ready-to-use SLURM array script is at the project root:
+Submit files live in [`condor/`](../condor/); the full lxplus walkthrough,
+including the rules that apply because the repository sits on EOS, is in
+[lxplus.md](lxplus.md) §7.
 
 ```bash
-sbatch run_svj_scan.sh          # as shipped: a 16-task array (tasks 0–15)
+source setup_env.sh
+condor_submit condor/smoke.sub      # one short job — always do this first
+condor_submit condor/scan.sub       # the 16-slice array
 
-# After all tasks finish, merge their partial NPZs:
+# After all slices finish, merge their partial NPZs:
 python src/run_regression/scan_svj.py --merge --n-jobs 16
 ```
 
-The array size is set in **two** places that must agree: the `#SBATCH
---array=0-15` directive and the `N_JOBS=16` shell variable further down. Change
-both, and pass the same number to `--merge`.
+The array size is set in **two** places inside `condor/scan.sub` that must
+agree — the `arguments = "scan 16 $(ProcId)"` line and `queue 16` — and the
+same number goes to `--merge`. Set `n_outer_workers` in the cfg to
+`request_cpus`.
 
-> These scripts are SLURM-specific and hardcode a Harvard partition
-> (`-p arguelles_delgado`), a notification address, and
-> `source ~/venvs/svj/bin/activate`. They need translating before use on
-> another batch system — see the lxplus notes in [setup.md](setup.md).
-To split manually:
+`--merge` resolves `output_dir` from the cfg you pass it, so if you redirected
+`output_dir`, pass the same cfg to the merge:
 
 ```bash
-# In any SLURM script body:
-python src/run_regression/scan_svj.py scan_regression.cfg \
-    --job-index $SLURM_ARRAY_TASK_ID --n-jobs $N_JOBS
-
-# After all jobs finish, merge:
-python src/run_regression/scan_svj.py --merge --n-jobs $N_JOBS
+python src/run_regression/scan_svj.py my_scan.cfg --merge --n-jobs 16
 ```
 
-## Batch TSV generation (`run_svj_tsv.sh`)
+To split manually, in any batch script body:
+
+```bash
+python src/run_regression/scan_svj.py scan_regression.cfg \
+    --job-index $TASK --n-jobs $N_JOBS      # Condor: pass $(ProcId) as $TASK
+python src/run_regression/scan_svj.py scan_regression.cfg --merge --n-jobs $N_JOBS
+```
+
+## Batch TSV generation (`condor/tsv.sub`)
 
 To generate a large TSV with more events than a single node can produce in one
-run, use the batch TSV script. Each SLURM array task runs the full binary
-with the same physics parameters but a unique `seed_offset`, so the events are
-statistically independent. The total event count is `N_JOBS × nEvent`
-(where `nEvent` comes from `svj_regression.cfg`).
+run, use the TSV workflow. Each array task runs the full binary with the same
+physics parameters but a unique `seed_offset`, so the events are statistically
+independent. The total event count is `N_JOBS × nEvent` (where `nEvent` comes
+from `svj_regression.cfg`).
 
 ```bash
 # 1. Submit the array (default: 4 tasks × nEvent events each):
-sbatch run_svj_tsv.sh
+condor_submit condor/tsv.sub
 
 # 2. After all tasks finish, merge the shards:
-bash merge_svj_tsv.sh 4          # 4 = N_JOBS in run_svj_tsv.sh
+bash merge_svj_tsv.sh 4          # 4 = `queue N` in condor/tsv.sub
 ```
 
 The merge script concatenates the `#`-header from shard 0 and all data rows
@@ -179,12 +184,7 @@ removes the per-job shard files. Pass `--keep-shards` to retain them.
 bash merge_svj_tsv.sh 4 --keep-shards
 ```
 
-Or submit the merge as a dependent job at `sbatch` time:
-
-```bash
-ARRAY_JID=$(sbatch --parsable run_svj_tsv.sh)
-sbatch --dependency=afterok:${ARRAY_JID} --wrap "bash merge_svj_tsv.sh 4"
-```
+There is no DAGMan file, so the merge is a manual step after the array drains.
 
 **How seed isolation works:** the binary computes each worker's PYTHIA seed as
 
@@ -201,7 +201,7 @@ With `nWorkers = 14` and `N_JOBS = 4`:
 | 2 | 2 | 29 – 42 |
 | 3 | 3 | 43 – 56 |
 
-No overlap, no duplicated events. The parameter scan (`run_svj_scan.sh`) is
+No overlap, no duplicated events. The parameter scan (`condor/scan.sub`) is
 unaffected — it never sets `seed_offset`, so it defaults to 0 and each
 scan-point simulation uses seeds 1..1 (one inner worker), which is correct and
 reproducible.

@@ -4,7 +4,8 @@ src/generate_events/svj_regression
 # Notebooks — the GUI is driven from a scratch notebook per user
 *.ipynb
 
-# Cluster job logs
+# Cluster job logs.  Condor writes these to $SVJ_AFS/logs on AFS, not here
+# (docs/lxplus.md §7.2) — this entry only catches stray local runs.
 logs/
 
 # Python bytecode / test cache
@@ -21,3 +22,4 @@ simulated/tsv/*.tsv
 simulated/svj/*_raw.npz
 simulated/tsv/report_figures/
 simulated/tsv/play_around/
+simulated_smoke/

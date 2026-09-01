@@ -8,16 +8,18 @@
 #
 #   <workflow> is one of: scan | tsv | validation
 #
-# Edit SVJ_ENV below to point at your own environment script (see docs/lxplus.md
-# §2).  That script must source an LCG view, activate the venv, and export
-# PYTHIA_DIR / FASTJET_DIR.
+# Environment, via SVJ_ENV — default: the setup_env.sh at the repository root.
+# It must source an LCG view and export PYTHIA_DIR / FASTJET_DIR (docs/lxplus.md
+# §2).  The default points inside the repo rather than at $HOME because a worker
+# node reads an EOS-resident clone reliably, whereas reaching your AFS home from
+# a worker is a separate credential question.
 #
-# NOTE: untested on lxplus.  Smoke-test with a single job first —
-# docs/lxplus.md §7.1.
+# SVJ_SCAN_CFG overrides the scan config, so one .sub can run either a one-point
+# smoke test (src/run_regression/scan_smoke.cfg) or a production grid.
 
 set -euo pipefail
 
-SVJ_ENV="${SVJ_ENV:-$HOME/setup_env.sh}"
+SVJ_SCAN_CFG="${SVJ_SCAN_CFG:-src/run_regression/scan_regression.cfg}"
 
 WORKFLOW="${1:?usage: svj_job.sh <scan|tsv|validation> <n_jobs> <task_id>}"
 N_JOBS="${2:?missing n_jobs}"
@@ -26,39 +28,46 @@ TASK="${3:?missing task id}"
 # Condor starts the job in its scratch dir; every path below is repo-relative,
 # and scan_svj.py resolves output_dir against the CWD, so move to the repo root.
 #
-# Derived from this script's own location, which is correct under
-# `should_transfer_files = NO` (the executable runs from its real path on a
-# shared filesystem).  If you enable file transfer, Condor copies this script
-# to scratch and that inference breaks — set SVJ_REPO explicitly instead.
+# $SVJ_REPO is the reliable source and every .sub sets it.  The $BASH_SOURCE
+# fallback only works when the executable really runs from its own path, which
+# on lxplus it does NOT: CERN's schedds transfer the executable to the job's
+# scratch directory even with `should_transfer_files = NO`, so $BASH_SOURCE
+# resolves to /pool/condor/dir_<n>/condor_exec.exe.  Observed, not theoretical —
+# it is what the first smoke test caught.
 REPO_ROOT="${SVJ_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
 if [[ ! -f "$REPO_ROOT/src/run_regression/scan_svj.py" ]]; then
     echo "ERROR: '$REPO_ROOT' does not look like the SVJ repository." >&2
-    echo "       Set SVJ_REPO=/path/to/SVJ (needed if your .sub uses" >&2
-    echo "       should_transfer_files = YES)." >&2
+    echo "       Set SVJ_REPO=/path/to/SVJ in your .sub's environment line." >&2
     exit 1
 fi
 cd "$REPO_ROOT"
+
+# Resolved only now, so it follows $SVJ_REPO rather than $BASH_SOURCE.
+SVJ_ENV="${SVJ_ENV:-$REPO_ROOT/setup_env.sh}"
 
 echo "=== SVJ $WORKFLOW  task $TASK / $((N_JOBS-1))  started $(date) ==="
 echo "    host:    $(hostname)"
 echo "    repo:    $REPO_ROOT"
 echo "    scratch: ${TMPDIR:-/tmp}   (workers write per-point cfg/TSV here)"
 
-# shellcheck source=/dev/null
-[[ -f "$SVJ_ENV" ]] && source "$SVJ_ENV" || {
+if [[ ! -f "$SVJ_ENV" ]]; then
     echo "ERROR: environment script not found: $SVJ_ENV" >&2
     echo "       Set SVJ_ENV, or create it (docs/lxplus.md §2)." >&2
-    exit 1; }
+    exit 1
+fi
+# shellcheck source=/dev/null
+source "$SVJ_ENV"
 
-echo "    python:  $(python --version 2>&1)"
-mkdir -p logs
+echo "    env:     $SVJ_ENV"
+echo "    python:  $(command -v python)  $(python --version 2>&1)"
 
 case "$WORKFLOW" in
 
   scan)
+    echo "    cfg:     $SVJ_SCAN_CFG"
     python src/run_regression/scan_svj.py \
-        src/run_regression/scan_regression.cfg \
+        "$SVJ_SCAN_CFG" \
         --job-index "$TASK" --n-jobs "$N_JOBS"
     ;;
 

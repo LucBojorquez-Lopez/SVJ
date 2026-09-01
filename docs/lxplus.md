@@ -4,16 +4,20 @@ A complete path from `git clone` to submitted batch jobs on lxplus, and an
 explicit account of **what ships with the repository versus what you have to
 rebuild**.
 
-> **What is verified, and what is not.** The build, the Python environment,
-> the analysis pipeline and the `condor/svj_job.sh` wrapper (env sourcing, repo
-> resolution, `$TMPDIR` handling, and the `scan` workflow end to end producing
-> a valid NPZ) were all exercised on Rocky Linux 8 / GCC 8.5 / Python 3.12.
+> **What is verified, and what is not.** The environment, the build and the
+> analysis pipeline were exercised on this account on lxplus (RHEL 9.8, LCG_110,
+> gcc 13.1, Python 3.13): `make svj_regression` against the LCG view and the
+> full §5 verification ladder.
 >
-> **Not** verified: the HTCondor submission layer itself — the `.sub` files,
-> `$(ProcId)` expansion, job flavours, and resource requests — because no
-> Condor pool was available. Nor the LCG view tags in §2, which change with
-> lxplus releases. Smoke-test with a single short job (§7.1) before submitting
-> an array.
+> The Condor path in §7 was arrived at by submitting real jobs, not by reading
+> documentation — the AFS/EOS split in §7.2 exists because the alternatives were
+> tried and observed to fail. `condor/smoke.sub` runs end to end: worker node
+> reads the EOS clone, sources `setup_env.sh`, runs the scan, writes its NPZ
+> back to EOS, and its `.out`/`.err` are readable.
+>
+> Still unexercised: the array `.sub` files at full size — their job flavours
+> and larger resource requests. They share every other setting with
+> `smoke.sub`. Run §7.3 first regardless; it costs a minute.
 
 ---
 
@@ -25,10 +29,10 @@ rebuild**.
 | Validation NPZs | ✅ committed | — |
 | Python analysis code, tests, docs | ✅ | — |
 | `Makefile` | ✅ tracked | — |
-| **PYTHIA 8.317** | ❌ | yes (§3) |
-| **FastJet 3.5.1** | ❌ | yes (§3) |
-| **`svj_regression` binary** | ❌ gitignored | yes (§4) |
-| **Python venv** | ❌ | yes (§2) |
+| **PYTHIA 8.317** | ❌ | **no** — comes from CVMFS (§2) |
+| **FastJet 3.5.1** | ❌ | **no** — comes from CVMFS (§2) |
+| Python environment | ❌ | **no** — comes from CVMFS (§2) |
+| **`svj_regression` binary** | ❌ gitignored | yes — one 4-second `make` (§4) |
 | Raw TSVs (`simulated/tsv/*.tsv`) | ❌ gitignored | regenerate as needed |
 
 The important consequence: **interpolation, sampling, the GUI and every
@@ -44,194 +48,148 @@ anywhere else.
 
 ## 2. Environment
 
-### Choose your filesystem first
-
-AFS home is quota-limited (~10 GB) and PYTHIA + FastJet together run to several
-GB, so they need somewhere else. Set up a work area for them:
+Everything comes from one LCG view on CVMFS. Source `setup_env.sh` at the
+repository root and you are done:
 
 ```bash
-export SVJ_WORK=/afs/cern.ch/work/${USER:0:1}/${USER}/svj
-mkdir -p "$SVJ_WORK"
+source setup_env.sh
 ```
 
-Where the **repository** itself lives is a separate choice. AFS work is the
-path of least resistance; EOS also works and is the right answer if your other
-repositories are already there — see the next section for how to make it fast.
-The venv can sit next to either.
+That is the whole setup. Put it in your `.bashrc` if you like; **every** shell
+and **every** batch job needs it.
 
-### Putting the repository on EOS
+### Why there is nothing to build
 
-EOS (`/eos/user/${USER:0:1}/${USER}/`) has far more room than AFS home, and if
-your other repositories already live there it is reasonable to keep this one
-there too. It works — with one caveat worth planning around.
+`LCG_110/x86_64-el9-gcc13-opt` ships **PYTHIA 8.317** and **FastJet 3.5.1** —
+precisely the versions this project targets — along with gcc 13.1, Python 3.13,
+numpy, scipy, matplotlib, tqdm, pytest, ipywidgets, ipympl and jupyterlab. So
+there is no PYTHIA build, no FastJet build, and no venv.
 
-EOS is a FUSE-mounted network filesystem tuned for streaming large files. Git
-is the opposite workload: thousands of small `stat`/`open`/`rename` calls
-against `.git`. So `clone`, `status` and `checkout` are noticeably slower than
-on AFS. The repository is only ~73 MB, so this is a matter of seconds-to-minutes
-of patience, not a blocker. Three things make it markedly better:
+This is not merely convenient. Source-building PYTHIA and FastJet needs several
+GB, and on a default CERN account there is nowhere to put them: AFS home is a
+2 GB quota, and `/afs/cern.ch/work/<u>/<user>` **does not exist** until you
+request it through the CERN Resources portal. Earlier revisions of this guide
+told you to build into `$SVJ_WORK` on AFS work; on an account without that
+volume, that instruction cannot be followed. The CVMFS route sidesteps the
+question entirely and costs no quota at all.
 
-**1. Tune git for a slow filesystem.** Run once, inside the clone:
+`setup_env.sh` sets, on top of the view:
+
+| Variable | Why |
+|---|---|
+| `PYTHIA_DIR`, `FASTJET_DIR` | both point at the view — it is a single prefix providing `lib/libpythia8.so` and `bin/fastjet-config`, which is all the `Makefile` asks for |
+| `GZIP_LIB` | an extra `-Wl,-rpath` to the view's gcc `lib64` (see §4) |
+| `SVJ_REPO` | the repo root; the `.sub` files read it via `$ENV(SVJ_REPO)` |
+| `X509_USER_PROXY` | `~/private/x509up` by default; the `.sub` files read it via `$ENV(...)` |
+| `PYTEST_DISABLE_PLUGIN_AUTOLOAD` | an autoloaded pytest plugin in the view otherwise emits CDash `<DartMeasurement>` XML for every test, burying the summary under thousands of lines of markup |
+
+To pin a different view, `export LCG_VIEW=...` before sourcing. List what is
+actually available rather than trusting a tag in a document — they come and go
+with lxplus releases:
 
 ```bash
-git config feature.manyFiles true    # index v4 + untracked cache + faster fetch
-git config core.untrackedCache true  # skip re-stat'ing unchanged directories
-git config core.preloadIndex true    # parallel index refresh
-git config core.splitIndex true      # cheaper index writes
-git config core.commitGraph true     # faster history walks
-git config core.fsyncMethod batch    # batch fsyncs instead of per-file
-git config gc.auto 0                 # no surprise repack mid-session
-git commit-graph write --reachable
+ls /cvmfs/sft.cern.ch/lcg/views/          # pick an LCG_* release
+ls /cvmfs/sft.cern.ch/lcg/views/LCG_110/  # pick a platform
 ```
 
-`git status` is the command that benefits most, since the untracked cache is
-what removes the repeated directory stats.
+Any view you choose must provide both `lib/libpythia8.so` and
+`bin/fastjet-config`; `make check-deps` tells you in one second if it does not.
 
-**2. Clone locally, then copy.** A direct clone onto EOS pays the small-file
-penalty for every object. Cloning to fast local disk first and moving the
-result as one bulk transfer — which EOS *is* good at — is usually faster:
+> **One trap worth knowing about.** The view's own `setup.sh` reads `$COMPILER`
+> unguarded, so it aborts with `COMPILER: unbound variable` under `set -u`.
+> `condor/svj_job.sh` runs `set -euo pipefail`, which means a naive `source`
+> kills every batch job on that line. `setup_env.sh` shields the source and
+> restores the caller's flags afterwards, so callers need no special handling.
+
+### If the LCG view ever fails you
+
+Building from source still works and the `Makefile` still supports it — you just
+need somewhere with a few GB. Request an AFS work volume, or use an EOS
+directory, then:
 
 ```bash
-git clone https://github.com/LucBojorquez-Lopez/SVJ.git /tmp/SVJ
-cp -a /tmp/SVJ /eos/user/${USER:0:1}/${USER}/SVJ
-rm -rf /tmp/SVJ
-```
+export SVJ_WORK=/afs/cern.ch/work/${USER:0:1}/${USER}/svj    # once granted
+mkdir -p "$SVJ_WORK" && cd "$SVJ_WORK"
 
-**3. Or keep `.git` off EOS entirely.** `--separate-git-dir` leaves the working
-files on EOS while the git metadata — the part that hurts — sits on AFS work.
-The worktree gets a small `.git` *file* pointing at the real directory, and
-every git command works normally through it:
-
-```bash
-git clone --separate-git-dir="$SVJ_WORK/SVJ.git" \
-    https://github.com/LucBojorquez-Lopez/SVJ.git \
-    /eos/user/${USER:0:1}/${USER}/SVJ
-```
-
-The trade-off: two locations to keep track of, and the worktree is not
-self-contained if you move it. Verified working — `status`, `log`, the test
-suite and sampling all behave identically through the pointer.
-
-### What should *not* go on EOS
-
-- **The PYTHIA and FastJet builds.** These are many thousands of small
-  compile-and-link writes and are genuinely painful on EOS. They are not part
-  of the repository, so put them in `$SVJ_WORK` (§3) regardless of where the
-  clone lives.
-- Building `svj_regression` itself is fine on EOS — it is one `g++` invocation
-  producing one output file.
-
-### Batch jobs must be able to read EOS
-
-This is the one that will actually bite you. With
-`should_transfer_files = NO`, an HTCondor job reads the executable and the
-repository straight from the shared filesystem, so the worker node needs
-valid credentials for it. For an EOS-resident repository add to your `.sub`:
-
-```
-MY.SendCredential = True
-```
-
-Credential handling on lxplus changes between releases, so treat this as the
-first thing to confirm in the §7.1 smoke test — check the job's `.err` for
-permission or "no such file" errors on repository paths. If credential
-forwarding turns out to be awkward, the fallbacks are to keep the clone (or at
-least a checkout) in `$SVJ_WORK` for batch use, or to switch the `.sub` to
-`should_transfer_files = YES` and set `SVJ_REPO` explicitly, which
-`condor/svj_job.sh` supports.
-
-### Compiler and Python via LCG
-
-The system GCC on lxplus may predate the C++17 support this project needs.
-Source an LCG view first — list what is actually available rather than copying
-the tag below verbatim:
-
-```bash
-ls /cvmfs/sft.cern.ch/lcg/views/            # pick a current LCG_* release
-source /cvmfs/sft.cern.ch/lcg/views/LCG_105/x86_64-el9-gcc13-opt/setup.sh
-g++ --version         # need >= 9
-python3 --version     # need >= 3.9
-```
-
-Put that `source` line in a small `setup_env.sh` of your own — **every** shell
-and **every** batch job needs it before activating the venv.
-
-### Create the venv
-
-Create it *after* sourcing the LCG view so it inherits that Python:
-
-```bash
-cd "$SVJ_WORK"
-python3 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip
-pip install numpy "scipy>=1.6" matplotlib tqdm pytest ipywidgets ipympl jupyterlab
-```
-
-Drop `ipywidgets ipympl jupyterlab` if you will not run the GUI, and
-`matplotlib` too if you only need the scan and fits.
-
----
-
-## 3. Build PYTHIA and FastJet
-
-```bash
-cd "$SVJ_WORK"
-
-# PYTHIA 8.317
 wget https://pythia.org/download/pythia83/pythia8317.tgz
-tar xzf pythia8317.tgz
-cd pythia8317 && ./configure && make -j4 && cd ..
+tar xzf pythia8317.tgz && cd pythia8317 && ./configure && make -j4 && cd ..
 
-# FastJet 3.5.1
 wget http://fastjet.fr/repo/fastjet-3.5.1.tar.gz
-tar xzf fastjet-3.5.1.tar.gz
-cd fastjet-3.5.1
-./configure --prefix="$SVJ_WORK/fastjet3"
-make -j4 install && cd ..
+tar xzf fastjet-3.5.1.tar.gz && cd fastjet-3.5.1
+./configure --prefix="$SVJ_WORK/fastjet3" && make -j4 install && cd ..
+
+export PYTHIA_DIR="$SVJ_WORK/pythia8317" FASTJET_DIR="$SVJ_WORK/fastjet3"
 ```
 
 Use `-j4`, not `-j$(nproc)` — lxplus login nodes are shared and heavily
-parallel builds get throttled or killed. Expect 15–30 minutes for PYTHIA.
+parallel builds get throttled or killed. Expect 15–30 minutes for PYTHIA. Do
+this on AFS or local disk, **not** EOS: it is many thousands of small
+compile-and-link writes, which is the one workload EOS is genuinely bad at.
+
+---
+
+## 3. Where the repository lives
+
+EOS (`/eos/user/${USER:0:1}/${USER}/`) has far more room than AFS home, and if
+your other repositories already live there it is the natural home for this one.
+It works, and on a warm FUSE mount it is not even slow — `git status` on this
+73 MB clone measures ~0.1 s.
+
+If you do hit small-file slowness, `git config feature.manyFiles true` plus
+`core.untrackedCache`, `core.preloadIndex` and `core.commitGraph` are the
+settings that help most. Treat them as a remedy, not a prerequisite.
+
+One consequence of an EOS-resident clone is not about git at all: Condor
+cannot put its executable or its logs there, so a small amount has to sit on
+AFS. That is handled for you — see §7.2.
 
 ---
 
 ## 4. Clone and build the generator
 
-Clone wherever you decided in §2 — `$SVJ_WORK` below, or an EOS path using one
-of the three approaches in "Putting the repository on EOS":
-
 ```bash
-cd "$SVJ_WORK"                    # or your EOS directory
+cd /eos/user/${USER:0:1}/${USER}          # or wherever you decided in §3
 git clone https://github.com/LucBojorquez-Lopez/SVJ.git
 cd SVJ
 
-export PYTHIA_DIR="$SVJ_WORK/pythia8317"
-export FASTJET_DIR="$SVJ_WORK/fastjet3"
-
-make check-deps        # confirms both are findable; builds nothing
-make svj_regression
+source setup_env.sh
+make check-deps        # confirms PYTHIA + FastJet are findable; builds nothing
+make svj_regression    # ~4 seconds
 ```
 
-`PYTHIA_DIR`/`FASTJET_DIR` point into `$SVJ_WORK` regardless of where the clone
-lives — those builds should stay off EOS.
+`PYTHIA_DIR` / `FASTJET_DIR` come from `setup_env.sh`, so plain
+`make svj_regression` is all you ever type. Both are resolved to **absolute**
+paths and written into the binary's rpath, so the executable runs from any
+working directory.
 
-Add those two `export` lines to your `setup_env.sh` so plain
-`make svj_regression` keeps working, and because batch jobs that rebuild need
-them.
-
-Both paths are resolved to **absolute** paths and written into the binary's
-rpath, so the executable runs from any working directory.
+> **Why `GZIP_LIB` is in `setup_env.sh`.** The binary links against the view's
+> gcc-13 libraries, but the loader resolves `libstdc++` against EL9's system
+> copy, which is gcc-11-era — the binary then dies with
+> `GLIBCXX_3.4.31 not found`. `setup_env.sh` adds an rpath to the view's gcc
+> `lib64` to fix it. `GZIP_LIB` is otherwise only set by PYTHIA's own
+> `examples/Makefile.inc`, which a CVMFS view does not ship, so the `Makefile`
+> appends it to the link line untouched and needs no edit.
+>
+> With that rpath the binary runs on nothing but `PYTHIA8DATA`. Without it, it
+> runs only while the view is sourced. Sourcing `setup_env.sh` is required for
+> Python regardless, so this is belt-and-braces — but it turns a confusing
+> runtime loader error into a non-issue.
 
 ---
 
 ## 5. Verify, in increasing order of cost
 
+Run these in order. If step 1 or 2 fails, the problem is your environment. If 3
+fails, it is the build. Keeping them separate saves a lot of time. Timings below
+are measured on an lxplus login node.
+
 ```bash
-# 1. Analysis code only — no PYTHIA, no NPZ.  ~10 s
+source setup_env.sh
+
+# 1. Analysis code only — no PYTHIA, no NPZ.               ~2 s
 pytest tests/ -q                                  # expect 211 passed
 
-# 2. The shipped scan interpolates and samples.  ~5 s
+# 2. The shipped scan interpolates and samples.            ~5 s
 python -c "
 import numpy as np, sys; sys.path.insert(0,'src')
 import helpers
@@ -240,18 +198,21 @@ R,op,off,names = helpers.interpolate_svj_params(
 X = helpers.sample_svj_new(R,op,off,names,n_samples=50_000)
 X = X[np.isfinite(X).all(axis=1)]
 print('sampled', X.shape, 'observables:', names)"
+# expect ~(49_97x, 11) — a few draws are NaN by design, see api.md
 
-# 3. The binary runs.  ~1 min
+# 3. The binary runs.  50 000 events, 16 threads.          ~35 s
 src/generate_events/svj_regression src/generate_events/svj_regression.cfg
-wc -l simulated/tsv/jets_default.tsv
+wc -l simulated/tsv/jets_default.tsv               # expect 49999
 
-# 4. A one-point scan, end to end.  ~2 min
-#    Copy scan_regression.cfg, set every axis to n=1 and nEvent=2000 first.
-python src/run_regression/scan_svj.py my_tiny_scan.cfg
+# 4. A one-point scan, end to end.                         ~20 s
+python src/run_regression/scan_svj.py src/run_regression/scan_smoke.cfg
+# → simulated_smoke/svj/svj_scan.npz, param_flat (1,1,1,1,1,1,184)
 ```
 
-If step 1 or 2 fails, the problem is your venv. If 3 fails, it is the C++
-build. Keeping them separate saves a lot of time.
+Step 4 uses the committed `scan_smoke.cfg` — one grid point at 2000 events.
+It writes to `simulated_smoke/`, deliberately not `simulated/`, because a
+one-point scan with `n_jobs=1` is named `svj_scan.npz` and would otherwise
+overwrite the committed 6-axis production scan.
 
 ---
 
@@ -259,7 +220,9 @@ build. Keeping them separate saves a lot of time.
 
 The scan and validation workers write a per-point cfg and TSV to
 `tempfile.gettempdir()`, which honours **`$TMPDIR`**. HTCondor sets `$TMPDIR`
-to the job's private scratch directory, so this works with no configuration.
+to the job's private scratch directory, so this works with no configuration —
+confirmed in the smoke test, which reported
+`scratch: /pool/condor/dir_<n>/tmp`.
 
 Do not override `$TMPDIR` to a shared or network path. Each worker's TSV holds
 `nEvent` events, and `n_outer_workers` of them exist at once — with
@@ -276,40 +239,104 @@ request_disk = 4 GB
 
 ## 7. HTCondor
 
-The `run_svj_*.sh` scripts at the repository root are **SLURM** array jobs for
-a specific Harvard partition. They do not run under HTCondor. Below is the
-equivalent for each; the shared wrapper is
-[`condor/svj_job.sh`](../condor/svj_job.sh).
+Every workflow runs through one shared wrapper,
+[`condor/svj_job.sh`](../condor/svj_job.sh), with the settings common to all
+submit files in [`condor/_common.inc`](../condor/_common.inc).
 
-The mapping is mechanical:
-
-| SLURM | HTCondor |
-|-------|----------|
-| `--array=0-15` | `queue 16` |
-| `$SLURM_ARRAY_TASK_ID` | `$(ProcId)` |
-| `-c 16` | `request_cpus = 16` |
-| `--mem=2G` | `request_memory = 2 GB` |
-| `-t 0-10:00` | `+JobFlavour = "tomorrow"` |
-| `-p <partition>` | (no equivalent; flavour sets the wall-clock limit) |
-| `--output=logs/x_%A_%a.out` | `output = logs/x_$(ClusterId)_$(ProcId).out` |
-| `--dependency=afterok:<id>` | a DAGMan `.dag` file, or submit the merge by hand |
+| File | Workflow | Merge step |
+|------|----------|-----------|
+| `smoke.sub` | one grid point, `espresso` — run first | — |
+| `scan.sub` | parameter scan → `svj_scan_*.npz` | `scan_svj.py --merge --n-jobs N` |
+| `tsv.sub` | batch TSV shards | `bash merge_svj_tsv.sh N` |
+| `validation.sub` | production validation | `python merge_svj_validation.py` |
 
 Job flavours cap wall time: `espresso` 20 min, `microcentury` 1 h, `longlunch`
 2 h, `workday` 8 h, `tomorrow` 1 day, `testmatch` 3 days, `nextweek` 1 week.
 
-### 7.1 Smoke test first
-
-Before any array, submit **one** short job and read its log:
+### 7.1 Every submission
 
 ```bash
-condor_submit condor/scan.sub -append 'queue 1' \
-                              -append '+JobFlavour = "espresso"'
+source setup_env.sh
+condor_submit condor/smoke.sub
 condor_q
-# when done:
-cat logs/scan_*.err
 ```
 
-### 7.2 Parameter scan
+No `module load`, no schedd juggling. That is deliberate, and §7.2 explains
+what it cost to get there.
+
+### 7.2 Why a little of this lives on AFS
+
+The repository, the configs, the NPZs and all bulk data are on EOS. Two small
+things are not: the script Condor executes, and the job logs. Both live under
+`$SVJ_AFS` (default `~/.svj`), which `setup_env.sh` creates and populates.
+
+That split is forced, not chosen. CERN's standard schedds reject a submit file
+naming any `/eos` path in `exec`, `log`, `output`, `error` or `TransferInput`:
+
+```
+Standard batch schedds cannot use /eos paths directly within the submit file.
+```
+
+`module load lxbatch/eossubmit` routes you to a schedd that accepts those — but
+that schedd then rejects every path that is **not** on `/eos`:
+
+```
+Non-supported submit file for EosSubmit schedd: Absolute paths in exec,
+stdin/out/err, TransferInput must be in /eos.
+```
+
+So it is all-EOS or all-AFS; there is no mixing. And all-EOS does not work:
+a job's `.out`/`.err` transferred back to EOS land in the namespace but stat as
+`-??????????` indefinitely — `ls` shows the entry, `cat` says "No such file or
+directory", and it never resolves. The job itself succeeds and writes its NPZ
+fine, but you cannot read its stdout or stderr, which makes debugging an array
+impossible. Both were confirmed by test submissions.
+
+Hence: launcher and logs on AFS, everything else on EOS. The pieces are
+
+| Path | What |
+|---|---|
+| `$SVJ_AFS/launch.sh` | `exec`s into `$SVJ_REPO/condor/svj_job.sh` after checking `SVJ_REPO` is set and reachable; kept in sync from the tracked `condor/launch.sh` by `setup_env.sh` |
+| `$SVJ_AFS/logs/` | `.out`, `.err`, `.log` |
+| `initialdir` | `$SVJ_AFS` — `condor_submit` otherwise uses your cwd as the job's `iwd`, and an `/eos` `iwd` is itself a rejected path |
+| `environment` | carries `SVJ_REPO`; `launch.sh` runs from a scratch copy and cannot infer the repo from its own location |
+
+**The worker node never reads AFS.** Condor transfers `launch.sh` to scratch.
+The worker reads EOS, using the forwarded x509 proxy — which is why
+`use_x509userproxy` matters and why an expired proxy shows up as a "cannot read
+the repository" error rather than anything mentioning credentials.
+
+Edit `condor/launch.sh` in git, then re-source `setup_env.sh`; it reinstalls
+the AFS copy whenever the two differ and says so.
+
+AFS home is a 2 GB quota, so prune `$SVJ_AFS/logs` occasionally. A 16-job array
+produces 33 small text files.
+
+Refresh the proxy before a long array — one that expires mid-array takes the
+remaining jobs with it. Note `-out`: without it `voms-proxy-init` writes to
+`/tmp`, which is node-local and useless to Condor.
+
+```bash
+voms-proxy-init -voms atlas -out "$X509_USER_PROXY" -valid 168:00
+voms-proxy-info -file "$X509_USER_PROXY" -timeleft
+```
+
+### 7.3 Smoke test first — this is mandatory
+
+```bash
+source setup_env.sh
+condor_submit condor/smoke.sub
+condor_q
+cat "$SVJ_AFS"/logs/smoke_*.err "$SVJ_AFS"/logs/smoke_*.out
+```
+
+One `espresso` job, one grid point, 2000 events, under a minute of compute.
+It is the only test that exercises what no local run can: that a worker node
+can read the EOS-resident repository, source `setup_env.sh` off EOS, find the
+binary, and write results back. Read its `.err` for permission or
+"no such file" errors on repository paths before you submit anything larger.
+
+### 7.4 Parameter scan
 
 ```bash
 condor_submit condor/scan.sub
@@ -318,11 +345,19 @@ condor_submit condor/scan.sub
 python src/run_regression/scan_svj.py --merge --n-jobs 16
 ```
 
-`N_JOBS` must agree in three places: `queue N` in the `.sub`, the `--n-jobs`
-argument, and the `--merge --n-jobs` call. Set `n_outer_workers` in
+`N_JOBS` must agree in three places: `queue N` in the `.sub`, the `arguments`
+line, and the `--merge --n-jobs` call. Set `n_outer_workers` in
 `src/run_regression/scan_regression.cfg` to match `request_cpus`.
 
-### 7.3 Batch TSV generation
+To run a different grid without editing `scan_regression.cfg`, point
+`SVJ_SCAN_CFG` at another file — that is how `smoke.sub` selects
+`scan_smoke.cfg`:
+
+```
+environment = "SVJ_REPO=$(SVJ_REPO_DIR) SVJ_SCAN_CFG=path/to/my.cfg"
+```
+
+### 7.5 Batch TSV generation
 
 ```bash
 condor_submit condor/tsv.sub
@@ -332,7 +367,7 @@ bash merge_svj_tsv.sh 4          # after all jobs finish
 Each job gets a distinct `seed_offset`, so PYTHIA seeds never overlap — see the
 seed table in [running-a-scan.md](running-a-scan.md).
 
-### 7.4 Production validation
+### 7.6 Production validation
 
 ```bash
 condor_submit condor/validation.sub
@@ -354,10 +389,9 @@ export EOS_SVJ=/eos/user/${USER:0:1}/${USER}/svj
 mkdir -p "$EOS_SVJ"/{tsv,scans,raw}
 ```
 
-Point the scan output there with `output_dir` in the `[simulation]` section of
-`scan_regression.cfg`, and pass EOS paths to `tsv_file` / `tsv_kin_file` in
-`svj_regression.cfg`. `--save-raw` output in particular (hundreds of MB to
-several GB) should never touch AFS.
+Pass EOS paths to `tsv_file` / `tsv_kin_file` in `svj_regression.cfg`.
+`--save-raw` output in particular (hundreds of MB to several GB) should never
+touch AFS.
 
 To load a scan from EOS:
 
@@ -365,23 +399,33 @@ To load a scan from EOS:
 helpers.set_svj_scan_path('/eos/user/l/lbojorqu/svj/scans/svj_scan.npz')
 ```
 
-Note that `scan_svj.py` resolves `output_dir` **relative to the current working
-directory**, so batch jobs must `cd` to the repository root first — the wrapper
-in `condor/svj_job.sh` does this.
+> **Before you redirect `output_dir`.** `scan_svj.py` resolves `output_dir`
+> relative to the current working directory, so batch jobs must `cd` to the
+> repository root first — `condor/svj_job.sh` does this.
+>
+> More awkwardly: **`--merge` ignores `output_dir` entirely** and always reads
+> and writes `simulated/svj/`. Point `output_dir` somewhere else and the scan
+> shards land there while the merge looks in `simulated/svj/` and finds
+> nothing. Either leave `output_dir` at its default `simulated`, or merge by
+> hand. The scan NPZs are a few MB, so the default costs little.
 
 ---
 
 ## 9. Known gaps
 
-- The `.sub` files in `condor/` have never been submitted to a real Condor
-  pool. The wrapper they call is tested; the submission layer is not. Treat
-  §7.1 as mandatory.
+- The array `.sub` files (`scan`, `tsv`, `validation`) have not been submitted
+  at full size. They share all their plumbing with `smoke.sub` via
+  `_common.inc`, so §7.3 covers the risky part, but job flavours and the larger
+  `request_cpus` / `request_memory` / `request_disk` values are unexercised.
+- `merge_svj_validation.py` hardcodes `N_JOBS = 16` and the shard path pattern.
 - The `validation` workflow's `--N3 125` and the `tsv` workflow's overrides are
   hardcoded in `condor/svj_job.sh`; edit them there, not in the `.sub`.
-- `MY.SendCredential = True` is set in the `.sub` files for EOS-resident
-  repositories, but credential forwarding on lxplus has not been tested here
-  and changes between releases. Confirm it in the §7.1 smoke test.
-- `merge_svj_validation.py` hardcodes `N_JOBS = 16` and the shard path pattern.
 - There is no DAGMan file, so the merge step after each array is manual.
 - `sample_svj_new` returns NaN for a small fraction of draws; see the
   known-limitation section of [api.md](api.md).
+- `setup_env.sh` pins `LCG_110/x86_64-el9-gcc13-opt`. LCG views are eventually
+  removed from CVMFS; when that one goes, pick a newer view that still carries
+  pythia8 and fastjet and `export LCG_VIEW=...` (§2).
+- Writing job `.out`/`.err` to EOS is broken, not merely discouraged (§7.2). If
+  a future lxplus release fixes it, the AFS split in `_common.inc` could be
+  dropped — retest before assuming so.

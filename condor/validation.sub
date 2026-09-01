@@ -1,32 +1,26 @@
 # condor/validation.sub — production validation, 16 x 125 = 2000 points
 #
+#   source setup_env.sh
 #   condor_submit condor/validation.sub
 #   python merge_svj_validation.py     # after all done (edit N_JOBS if changed)
 #
+# Run condor/smoke.sub FIRST (docs/lxplus.md §7.3).
+#
 # Each validation point costs THREE PYTHIA runs — by far the most expensive
 # workflow.  Measure one point (N3=2, queue 1) before scaling.
-# N3 per task is set in condor/svj_job.sh.
-# Untested on lxplus — smoke-test per docs/lxplus.md §7.1.
+# N3 per task is set in condor/svj_job.sh, not here.
 
-universe                = vanilla
-executable              = condor/svj_job.sh
-arguments               = "validation 16 $(ProcId)"
+include : condor/_common.inc
 
-output                  = logs/val_$(ClusterId)_$(ProcId).out
-error                   = logs/val_$(ClusterId)_$(ProcId).err
-log                     = logs/val_$(ClusterId).log
+arguments = "validation 16 $(ProcId)"
 
-request_cpus            = 16
-request_memory          = 4 GB
-request_disk            = 8 GB
-+JobFlavour             = "tomorrow"
+output = $(SVJ_AFS_DIR)/logs/val_$(ClusterId)_$(ProcId).out
+error  = $(SVJ_AFS_DIR)/logs/val_$(ClusterId)_$(ProcId).err
+log    = $(SVJ_AFS_DIR)/logs/val_$(ClusterId).log
 
-should_transfer_files   = NO
-getenv                  = True
-
-# Required if the repository lives on EOS: the worker node needs forwarded
-# credentials to read it.  Harmless otherwise.  Credential handling on lxplus
-# changes between releases — confirm in the smoke test (docs/lxplus.md §7.1).
-MY.SendCredential       = True
+request_cpus   = 16
+request_memory = 4 GB
+request_disk   = 8 GB
++JobFlavour    = "tomorrow"
 
 queue 16

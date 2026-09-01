@@ -82,12 +82,14 @@ show()
 ```
 SVJ/
 ├── Makefile                       make svj_regression | check-deps | clean
-├── run_svj_scan.sh                SLURM array job: parameter scan → svj_scan.npz
-├── run_svj_tsv.sh                 SLURM array job: batch TSV generation
-├── run_svj_validation.sh          SLURM array job: production validation
-├── merge_svj_tsv.sh               Merge per-job TSV shards after run_svj_tsv.sh
-├── merge_svj_validation.py        Merge per-task NPZs after run_svj_validation.sh
-├── condor/                        HTCondor equivalents for lxplus (see docs/lxplus.md)
+├── setup_env.sh                   lxplus environment: LCG view + build vars
+├── merge_svj_tsv.sh               Merge per-job TSV shards after condor/tsv.sub
+├── merge_svj_validation.py        Merge per-task NPZs after condor/validation.sub
+├── condor/                        HTCondor submit files (see docs/lxplus.md)
+│   ├── _common.inc                  settings shared by every .sub
+│   ├── smoke.sub                    one-job smoke test — run this first
+│   ├── launch.sh                    AFS-side entry point (see docs/lxplus.md §7.2)
+│   └── svj_job.sh                   shared job wrapper
 ├── src/
 │   ├── generate_events/
 │   │   ├── svj_regression.cc      C++ event generator (PYTHIA8 + FastJet)
@@ -95,6 +97,7 @@ SVJ/
 │   ├── run_regression/
 │   │   ├── scan_svj.py            Main scan script (grid → svj_scan.npz)
 │   │   ├── scan_regression.cfg    Config for scan_svj.py (grid axes, physics params)
+│   │   ├── scan_smoke.cfg         One-point config for smoke tests
 │   │   ├── fit_raw.py             Re-fit from saved raw events (no re-simulation)
 │   │   ├── validate_fit.py        Marginal fit quality from a single TSV
 │   │   ├── validate_grid.py       Interpolation quality vs PYTHIA truth

@@ -1,31 +1,30 @@
 # condor/scan.sub — parameter scan, 16 parallel slices
 #
+#   source setup_env.sh
 #   condor_submit condor/scan.sub
 #   python src/run_regression/scan_svj.py --merge --n-jobs 16   # after all done
 #
+# Run condor/smoke.sub FIRST (docs/lxplus.md §7.3) — it is one espresso job and
+# validates the EOS/worker-node plumbing this file depends on.
+#
 # N_JOBS must agree in three places: the `arguments` line, `queue`, and the
 # --merge call above.  Set n_outer_workers in scan_regression.cfg to
-# request_cpus.  Untested on lxplus — smoke-test per docs/lxplus.md §7.1.
+# request_cpus.
+#
+# --merge reads simulated/svj/ unconditionally and ignores output_dir, so leave
+# output_dir at its default `simulated` unless you also merge by hand.
 
-universe                = vanilla
-executable              = condor/svj_job.sh
-arguments               = "scan 16 $(ProcId)"
+include : condor/_common.inc
 
-output                  = logs/scan_$(ClusterId)_$(ProcId).out
-error                   = logs/scan_$(ClusterId)_$(ProcId).err
-log                     = logs/scan_$(ClusterId).log
+arguments = "scan 16 $(ProcId)"
 
-request_cpus            = 16
-request_memory          = 4 GB
-request_disk            = 4 GB
-+JobFlavour             = "tomorrow"
+output = $(SVJ_AFS_DIR)/logs/scan_$(ClusterId)_$(ProcId).out
+error  = $(SVJ_AFS_DIR)/logs/scan_$(ClusterId)_$(ProcId).err
+log    = $(SVJ_AFS_DIR)/logs/scan_$(ClusterId).log
 
-should_transfer_files   = NO
-getenv                  = True
-
-# Required if the repository lives on EOS: the worker node needs forwarded
-# credentials to read it.  Harmless otherwise.  Credential handling on lxplus
-# changes between releases — confirm in the smoke test (docs/lxplus.md §7.1).
-MY.SendCredential       = True
+request_cpus   = 16
+request_memory = 4 GB
+request_disk   = 4 GB
++JobFlavour    = "tomorrow"
 
 queue 16

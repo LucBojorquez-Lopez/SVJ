@@ -158,10 +158,10 @@ Two pre-computed `validate_production.py` outputs are included, one per scan:
 | `simulated/svj/validation_production.npz` | the 6-axis `svj_scan.npz` | 2000 | 16 |
 
 Both used `N1 = 50 000` model samples and `N2 = 20 000` PYTHIA events per run.
-Each was produced by `run_svj_validation.sh` (a 16-task SLURM
-array) and merged with `merge_svj_validation.py`. Both scripts are
-SLURM-specific — `merge_svj_validation.py` hardcodes `N_JOBS = 16` and the
-shard path pattern, so edit it if you run a different array size. The per-task
+Each was produced by `condor/validation.sub` (a 16-task Condor
+array) and merged with `merge_svj_validation.py`, which hardcodes
+`N_JOBS = 16` and the shard path pattern — edit it if you run a different
+array size. The per-task
 shards are not kept in git once merged.
 
 ---
