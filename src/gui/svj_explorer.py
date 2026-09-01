@@ -34,6 +34,7 @@ from IPython.display import display, HTML
 import subprocess
 import tempfile
 import threading
+import time
 import os
 import sys
 from pathlib import Path
@@ -260,7 +261,7 @@ def _plot_hist_with_band(ax, data, bins, range_, color,
     The band is rendered as a fill_between in step form, clipped below at 0.
     """
     counts, edges = np.histogram(data, bins=bins, range=range_)
-    N       = max(len(data), 1)
+    N       = max(counts.sum(), 1)
     widths  = np.diff(edges)
     density = counts / (N * widths)
     p       = counts / N
@@ -677,11 +678,13 @@ def show(n_samples=10_000, scan_dir=None):
         use_fixed = (w_axes.value == 'Fixed')
         n         = w_nsamples.value
 
+        _t0 = time.perf_counter()
         try:
             X = _sample_model(scan_point, n, _rng)
         except ValueError as e:
             w_info.value = f'<span style="color:red">Error: {e}</span>'
             return
+        _mc_time = time.perf_counter() - _t0
 
         _state['model_samples'] = X
 
@@ -697,6 +700,8 @@ def show(n_samples=10_000, scan_dir=None):
             f'<span style="font-weight:bold; color:steelblue">'
             f'{n:,} samples — {param_str}'
             f'</span>'
+            + f'<br><span style="color:#555; font-size:0.85em">'
+              f'MC generated in {_mc_time:.2f} s</span>'
             + _fixed_params_html(scan_point)
             + val_note
         )
@@ -731,9 +736,11 @@ def show(n_samples=10_000, scan_dir=None):
                     f.write(cfg_text)
                     tmp_path = f.name
 
+                _t0_pythia = time.perf_counter()
                 result = subprocess.run(
                     [_BINARY, tmp_path],
                     stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+                _pythia_time = time.perf_counter() - _t0_pythia
                 if result.returncode != 0:
                     raise RuntimeError(
                         f'svj_regression exited {result.returncode}:\n'
@@ -744,13 +751,17 @@ def show(n_samples=10_000, scan_dir=None):
 
                 n       = w_nsamples.value
                 n_true  = len(true_data)
+                _pythia_time_str = (
+                    f'{int(_pythia_time // 60)}m {_pythia_time % 60:.1f}s'
+                    if _pythia_time >= 60 else f'{_pythia_time:.2f} s')
                 w_info.value = (
                     f'<span style="font-weight:bold; color:steelblue">'
                     f'{n:,} samples — {param_str}'
                     f'</span>'
                     + _fixed_params_html(scan_point)
                     + f'<br><span style="color:crimson; font-size:0.9em">'
-                      f'▶ Validation: {n_true:,} true events</span>'
+                      f'▶ Validation: {n_true:,} true events'
+                      f' (simulated in {_pythia_time_str})</span>'
                 )
 
                 X = _state['model_samples']

@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/test_transforms.py tests/test_observables.py -v)",
+      "Bash(python -m pytest tests/test_observables.py -x -q)",
+      "Bash(python -c ' *)",
+      "Bash(D=/home/bojorquezluc/Harvard/DarkQCD/PYTHIAplaythings/delphes3.5.1 *)",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -m py_compile src/generate_events/compare_delphes_truth.py)",
+      "Bash(python3 -m py_compile src/generate_events/plot_lego.py)",
+      "Bash([ -f \"$T\" ])",
+      "Bash([ -f \"$D\" ])",
+      "WebSearch",
+      "WebFetch(domain:ar5iv.labs.arxiv.org)",
+      "Bash(python3 -m py_compile src/generate_events/extract_delphes_plain.py)",
+      "Bash(python3 src/generate_events/extract_delphes_plain.py)",
+      "Bash(python3 src/run_regression/validate_fit.py simulated/tsv/jets_delphes_plain.tsv --obs leadVisPt,MET,leadJetMass,nConst --N1 3000 --N2 300 --bins 40 --out simulated/svj/validation_fit_delphes.npz)",
+      "Bash(make svj_regression)",
+      "Bash(echo \"--- exit: $? ---\")",
+      "Bash(mkdir -p /tmp/refactor_check)",
+      "Bash(cat)",
+      "Bash(time src/generate_events/svj_regression /tmp/refactor_check/test.cfg)",
+      "Bash(src/generate_events/svj_regression /tmp/refactor_check/test.cfg)",
+      "Bash(mv /tmp/refactor_check/before.tsv /tmp/refactor_check/before.tsv.bak)",
+      "Bash(pytest tests/ -q)",
+      "Bash(src/generate_events/svj_regression_delphes /tmp/refactor_check/delphes_test.cfg)",
+      "Bash(python3 src/run_regression/validate_fit.py /tmp/refactor_check/delphes_out.tsv --obs leadVisPt,MET,maxMuPt,jetThrust,hemiMass1,tau1 --N1 500 --N2 100 --bins 20 --out /tmp/refactor_check/validation_fit_test.npz)",
+      "Bash(echo \"=== exit: $? ===\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('src/run_regression/scan_svj.py'\\).read\\(\\)\\)\")",
+      "Bash(python3 -m pytest tests/ -q)",
+      "Bash(bash -n run_svj_tsv.sh)",
+      "Bash(bash -n merge_svj_tsv.sh)",
+      "Bash(rm -rf /tmp/dbg_delphes.cfg /tmp/dbg_delphes_out.tsv /tmp/dbg2.cfg /tmp/dbg2.tsv /tmp/t1.log /tmp/t2.log)"
+    ],
+    "additionalDirectories": [
+      "/home/bojorquezluc/Harvard/DarkQCD/PYTHIAplaythings/delphes3.5.1/modules"
+    ]
+  }
+}

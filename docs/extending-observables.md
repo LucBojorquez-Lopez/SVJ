@@ -46,22 +46,40 @@ parameters during MLE (e.g. `floc=0` to fix location to zero).
 
 Adding a new observable is a two-step process.
 
-**Step 1 — C++: `src/generate_events/svj_regression.cc`**
+**Step 1 — C++: `src/generate_events/svj_observables_common.h` + both binaries**
 
-1. Declare a local variable for the new quantity inside `runWorker()` (near the
-   other observable declarations, e.g. `double myObs = 0.0;`).
-2. Compute its value using the existing local variables available at that point
-   (jet kinematics, constituent arrays, particle-loop sums, etc.).
-3. Append its name to `OBS_NAMES` at the top of the file:
+The observable computation itself lives in **one shared, header-only file**,
+`svj_observables_common.h`, used identically by the truth-level binary
+(`svj_regression.cc`) and the Delphes-level binary
+(`svj_regression_delphes.cc`) — a new observable is computed once, not twice,
+so the two streams can never define it differently.
+
+1. Add a field to the `SvjObservables` struct and compute it inside
+   `computeSvjObservables()` in `svj_observables_common.h`, using the already-
+   classified `SvjJetInputs` (clustered jets, constituent arrays, sphericity
+   sums, etc. — the same inputs both binaries build).
+2. Append its name to `OBS_NAMES` at the top of **each** binary
+   (`svj_regression.cc` and `svj_regression_delphes.cc`), in the same
+   position in both files:
    ```cpp
    static const std::vector<std::string> OBS_NAMES = {
        ...,
-       "myObs",   // ← add here
+       "myObs",   // ← add here, same position in both files
    };
    ```
-4. Append the variable to `data.push_back({...})` at the end of `runWorker()`,
-   in the same position as its `OBS_NAMES` entry.
-5. Rebuild: `make svj_regression` from the project root.
+3. Append the field to `data.push_back({obs. ...})` in **each** binary's event
+   loop, in the same position as its `OBS_NAMES` entry.
+4. Rebuild both: `make svj_regression svj_regression_delphes` from the project
+   root.
+
+If the new observable is meaningless for Delphes-eflow-only input (i.e. it
+needs truth-level invisible-particle info, like `nInvClose`/`fInv`), it's
+fine to still add it to `svj_regression_delphes.cc`'s `OBS_NAMES` — passing
+an empty `invis_ptcls` list (as that binary always does) makes such fields
+evaluate to a well-defined `0` rather than requiring a separate code path;
+just don't select it in a Delphes scan's `--obs`/`DEFAULT_SCAN` if a
+non-trivial value matters for your analysis. See `docs/setup_delphes.md` for
+background on the truth/Delphes split.
 
 **Step 2 — Python: `src/observables.py`**
 
@@ -121,3 +139,65 @@ Example with a fixed-parameter flip (for thrust-like variables):
 
 The parameter `a=1.0` is the fixed upper bound of `affine_flip`; changing `a`
 requires editing the observable entry in `observables.py`.
+
+## Modelling an observable with a point mass at a boundary value
+
+Some observables have a physical spike at a specific boundary value — for
+example, `maxMuPt = 0` when no muon is produced, or `fInv = 0` when no jet
+constituents are invisible. These events would ordinarily be discarded by the
+Box-Cox range check.
+
+Adding an optional `point_mass` key enables a mixture-distribution model:
+
+```python
+OBSERVABLES['maxMuPt'] = {
+    ...
+    'point_mass': {
+        'value':   0.0,    # location of the point mass
+        'tol':     1e-10,  # |x - value| < tol → event is a PM event
+        'symmetric': False,  # if True, also treat x ≈ -value as a PM event
+        'min_p0':  0.01,   # minimum fraction required to activate the mixture
+    },
+}
+```
+
+**How it works.**
+Let `p0` be the fraction of events within tolerance of the boundary value.
+The fitted CDF is:
+
+```
+F_mix(x) = p0                          at x = boundary_value
+F_mix(x) = p0 + (1 - p0) * F_cont(x)  for x in the continuous part
+```
+
+`F_cont` is the usual pipeline-transform + parametric-distribution CDF fitted
+to the non-PM events only. The probability integral transform then yields proper
+`U[0, 1]` marginals (point-mass events receive a uniform draw from `[0, p0]`
+during fitting, and the deterministic midpoint `p0/2` during forward evaluation).
+
+**Parameter layout.** When `point_mass` is set, `p0` is stored as the *first*
+element of that observable's parameter block in `param_flat`.
+`n_fitted_params` returns one more than it would without the key.
+
+**`min_p0` threshold.** If the measured `p0 < min_p0` (default 0.01), the
+mixture is skipped at runtime (the observable is treated as purely continuous)
+but `p0` is still stored so that interpolation over the grid remains smooth.
+If `p0 = 1` (all events are at the boundary) a `ValueError` is raised.
+
+**`symmetric=True`.** For observables like `dPhiMETclose` that spike at both
+`+π` and `−π`, set `symmetric: True`. Events within tolerance of either
+`+value` or `−value` are treated as PM events; the inverse samples the sign
+uniformly at random.
+
+**`rng` parameter.** `fit_observable_col` accepts an optional `rng` keyword
+(a `numpy.random.Generator`) to make the randomised PIT reproducible:
+
+```python
+rng = np.random.default_rng(42)
+y_std, params = fit_observable_col(x_col, pipeline, dist_name,
+                                   point_mass=pm_spec, rng=rng)
+```
+
+**Disabling the mixture.** To revert an observable to purely continuous
+behaviour, remove the `point_mass` key (or set it to `None`). No other code
+changes are needed.

@@ -7,10 +7,11 @@ Transform diagnostics
 ---------------------
     plot_observable_transforms(tsv_path, obs='default', n_events=None)
 
-For each selected observable this produces a 3-panel figure:
-  Left:   raw distribution histogram
-  Middle: after all invertible transforms (but before distribution fit)
-  Right:  after full pipeline (standard-normal mapped) with N(0,1) overlay
+For each selected observable this produces a 4-panel figure:
+  Panel 1: raw distribution histogram
+  Panel 2: after all invertible transforms, with the fitted distribution overlaid
+  Panel 3: uniformized (PIT output, U[0,1]) with KS-test result
+  Panel 4: after full pipeline (standard-normal mapped) with N(0,1) overlay
 
 A summary line reports n_used / n_total (events passing range checks).
 
@@ -43,7 +44,7 @@ def plot_observable_transforms(
     tsv_path,
     obs='default',
     n_events=None,
-    figsize_per_obs=(12, 4.5),
+    figsize_per_obs=(16, 4.5),
     bins=60,
 ):
     """
@@ -60,7 +61,7 @@ def plot_observable_transforms(
     n_events : int or None
         If given, subsample to the first n_events rows after filtering.
     figsize_per_obs : (w, h)
-        Figure size for each observable's 3-panel row.
+        Figure size for each observable's 4-panel row.
     bins : int
         Number of histogram bins.
 
@@ -117,11 +118,24 @@ def plot_observable_transforms(
         dist_name = obs_spec['distribution']
         label     = obs_spec.get('label', obs_name)
 
-        x_raw = X_valid[:, col].copy()
+        x_raw   = X_valid[:, col].copy()
+        pm_spec = obs_spec.get('point_mass')
 
-        # Apply non-fitted transforms up to (but not including) the last step,
-        # so panel 2 shows the distribution that the fitted transform sees.
-        y = x_raw.copy()
+        # Detect point-mass events for Panel 1 annotation and pipeline safety.
+        if pm_spec is not None:
+            _pm_val = float(pm_spec['value'])
+            _pm_tol = float(pm_spec.get('tol', 1e-10))
+            pm_diag = np.abs(x_raw - _pm_val) < _pm_tol
+            if pm_spec.get('symmetric', False):
+                pm_diag |= np.abs(x_raw + _pm_val) < _pm_tol
+        else:
+            pm_diag = np.zeros(len(x_raw), dtype=bool)
+        p0_diag = float(pm_diag.mean())
+
+        # Panel 2: apply non-fitted transforms on the continuous subset only
+        # (avoids e.g. boxcox failing on point-mass values like 0).
+        x_cont = x_raw[~pm_diag] if pm_diag.any() else x_raw
+        y = x_cont.copy()
         for t_name, t_fixed in pipeline[:-1] if len(pipeline) > 1 else []:
             t    = TRANSFORMS[t_name]
             y, _ = t['fit'](y, **t_fixed)
@@ -133,21 +147,25 @@ def plot_observable_transforms(
             y_pre_fit = y.copy()
 
         # Full pipeline fit → probit-mapped values + all fitted params
-        y_std, all_params = fit_observable_col(x_raw, pipeline, dist_name)
+        y_std, all_params = fit_observable_col(x_raw, pipeline, dist_name,
+                                               point_mass=pm_spec)
 
         dist_spec   = DISTRIBUTIONS[dist_name]
         n_d         = dist_spec['n_params']
         dist_params = tuple(all_params[-n_d:])
 
-        pipe_title = _fmt_pipeline_title(pipeline, all_params, dist_name)
+        # Strip p0 from front of all_params before passing to title formatter
+        params_for_title = all_params[1:] if pm_spec is not None else all_params
+        pipe_title = _fmt_pipeline_title(pipeline, params_for_title, dist_name)
         dist_label = _fmt_dist_label(dist_name, dist_params)
 
         with plt.rc_context(_PLOT_RCPARAMS):
-            fig, axes = plt.subplots(1, 3, figsize=figsize_per_obs)
+            fig, axes = plt.subplots(1, 4, figsize=figsize_per_obs)
 
             # Two-line suptitle: observable name + fitted pipeline summary
+            pm_tag = f'   p0={p0_diag:.3f}' if pm_spec is not None else ''
             fig.suptitle(
-                f'{label}   (n={len(x_raw):,})\n{pipe_title}',
+                f'{label}   (n={len(x_raw):,}){pm_tag}\n{pipe_title}',
                 fontsize=10)
 
             # Panel 1: raw distribution
@@ -156,6 +174,10 @@ def plot_observable_transforms(
                     alpha=0.7, color='steelblue', histtype='stepfilled')
             ax.hist(x_raw, bins=bins, density=True,
                     alpha=0.9, color='steelblue', histtype='step', linewidth=1.2)
+            if pm_spec is not None and p0_diag > 0:
+                ax.axvline(_pm_val, color='crimson', linestyle='--', linewidth=1.2,
+                           label=f'PM={_pm_val:.3g}  p0={p0_diag:.3f}')
+                ax.legend(fontsize=7, framealpha=0.6)
             ax.set_xlabel(label, fontsize=10)
             ax.set_ylabel('Density', fontsize=9)
             ax.set_title('Raw', fontsize=10)
@@ -174,8 +196,24 @@ def plot_observable_transforms(
             ax.set_xlabel('Transformed value', fontsize=10)
             ax.legend(fontsize=7, framealpha=0.6, loc = 'best')
 
-            # Panel 3: probit-mapped (should be N(0,1))
+            # Panel 3: uniformized (PIT output, should be U[0,1])
+            u_cont = np.clip(dist_spec['dist'].cdf(y_pre_fit, *dist_params), 0.0, 1.0)
+            _ks_stat, _ks_p = st.kstest(u_cont, 'uniform')
             ax = axes[2]
+            ax.hist(u_cont, bins=bins, range=(0.0, 1.0), density=True,
+                    alpha=0.7, color='mediumpurple', histtype='stepfilled',
+                    label='data')
+            ax.hist(u_cont, bins=bins, range=(0.0, 1.0), density=True,
+                    alpha=0.9, color='mediumpurple', histtype='step', linewidth=1.2)
+            ax.axhline(1.0, color='k', linestyle='--', lw=1.5,
+                       label=f'U(0,1)   KS p={_ks_p:.3f}')
+            ax.set_xlim(0.0, 1.0)
+            ax.set_title('Uniformized (PIT)', fontsize=10)
+            ax.set_xlabel('u', fontsize=10)
+            ax.legend(fontsize=7, framealpha=0.6)
+
+            # Panel 4: probit-mapped (should be N(0,1))
+            ax = axes[3]
             ax.hist(y_std, bins=bins, density=True,
                     alpha=0.7, color='seagreen', histtype='stepfilled',
                     label='data')

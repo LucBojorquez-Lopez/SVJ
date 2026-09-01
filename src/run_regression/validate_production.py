@@ -24,12 +24,16 @@ Intended workflow
   2. validate_grid.py    → confirm interpolation works on a pre-production scan
   3. validate_production.py → full benchmark on the finalised scan
 
+Binary selection: the binary that generated scan_npz is auto-detected from
+its co-located svj_scan_meta.json ('binary' key, written by scan_svj.py).
+Override with --binary if you want to validate against a different one.
+
 Usage
 -----
 python src/run_regression/validate_production.py \\
     simulated/svj/svj_scan.npz \\
     [--N1 50000] [--N2 5000] [--N3 30] \\
-    [--n-workers 4] [--n-mmd 2000] [--bins 80] [--seed 0] \\
+    [--n-workers 4] [--n-mmd 2000] [--bins 80] [--seed 0] [--binary svj_regression] \\
     --out simulated/svj/validation_production.npz
 
 Output NPZ keys
@@ -65,7 +69,6 @@ from observables import (
 )
 from helpers import sample_svj_new
 from _val_utils import (
-    BINARY,
     load_scan, resolve_point, interp_at,
     sample_interior_points, nearest_grid_point,
     run_pythia, js_per_obs, mmd_rbf, extract_obs_cols,
@@ -88,7 +91,7 @@ def _worker(args):
      nearest_full_params,   # fully resolved physics params at nearest grid point
      R_upper, flat_obs,
      param_offsets_arr, obs_names,
-     N1, N2, bins, n_mmd) = args
+     N1, N2, bins, n_mmd, binary_path) = args
 
     so1 = 3 * task_id
     so2 = 3 * task_id + 1
@@ -96,9 +99,9 @@ def _worker(args):
 
     # ── Run PYTHIA ──────────────────────────────────────────────────────────────
     try:
-        data1, cmap1 = run_pythia(full_params,         N2, so1, f'{task_id}_t1')
-        data2, cmap2 = run_pythia(full_params,         N2, so2, f'{task_id}_t2')
-        datan, cmapn = run_pythia(nearest_full_params, N2, so3, f'{task_id}_ng')
+        data1, cmap1 = run_pythia(full_params,         N2, so1, f'{task_id}_t1', binary_path)
+        data2, cmap2 = run_pythia(full_params,         N2, so2, f'{task_id}_t2', binary_path)
+        datan, cmapn = run_pythia(nearest_full_params, N2, so3, f'{task_id}_ng', binary_path)
     except RuntimeError as e:
         return task_id, None, str(e)
 
@@ -169,13 +172,11 @@ def main():
                     help='Histogram bins for JS distance (default: 80)')
     ap.add_argument('--seed', type=int, default=0,
                     help='RNG seed for point sampling (default: 0)')
+    ap.add_argument('--binary', default=None,
+                    help='Binary name (resolved relative to src/generate_events/); '
+                         'default: auto-detected from svj_scan_meta.json')
     ap.add_argument('--out', required=True, help='Output NPZ path')
     args = ap.parse_args()
-
-    if not os.path.exists(BINARY):
-        print(f'ERROR: binary not found at {BINARY}. '
-              "Run 'make svj_regression' first.")
-        sys.exit(1)
 
     rng = np.random.default_rng(args.seed)
 
@@ -186,6 +187,18 @@ def main():
     obs_names  = scan['obs_names']
     K     = len(axis_names)
     n_obs = len(obs_names)
+
+    # ── Binary selection ──────────────────────────────────────────────────────
+    binary_name = args.binary or scan['binary']
+    binary_path = str(_SRC / 'generate_events' / binary_name)
+    if binary_name != scan['binary']:
+        print(f"  NOTE: --binary '{binary_name}' overrides scan's own "
+              f"binary '{scan['binary']}'.")
+    if not os.path.exists(binary_path):
+        print(f"ERROR: binary not found at {binary_path}. "
+              f"Run 'make {binary_name}' first.")
+        sys.exit(1)
+    print(f'  Binary: {binary_name}')
 
     validate_scan_selection(obs_names)
     grid_shape = ' × '.join(str(len(v)) for v in scan['axis_vals'])
@@ -228,7 +241,7 @@ def main():
             nearest_full_params,
             R_upper, flat_obs,
             scan['param_offsets'], obs_names,
-            args.N1, args.N2, args.bins, args.n_mmd,
+            args.N1, args.N2, args.bins, args.n_mmd, binary_path,
         ))
 
     if not tasks:

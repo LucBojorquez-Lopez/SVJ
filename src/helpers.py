@@ -466,6 +466,7 @@ def sample_svj_new(R_upper, flat_obs_params, param_offsets, obs_names,
         p_start  = int(param_offsets[i])
         p_end    = int(param_offsets[i + 1])
         params   = tuple(flat_obs_params[p_start:p_end])
-        X[:, i]  = inverse_observable_col(u[:, i], pipeline, dist, params)
+        X[:, i]  = inverse_observable_col(u[:, i], pipeline, dist, params,
+                                          point_mass=obs_spec.get('point_mass'))
 
     return X

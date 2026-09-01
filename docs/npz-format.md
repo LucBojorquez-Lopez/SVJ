@@ -11,6 +11,11 @@ The example below shows the default 4-axis scan.
 | `{name}_vals` | `(N_k,)` | Grid values for each axis (one array per axis name) |
 | `param_flat` | `(N_0, …, N_{K-1}, total_params)` | All fitted parameters, flat over the K-D grid |
 | `param_offsets` | `(n_obs+1,)` | `param_flat[..., offsets[i]:offsets[i+1]]` = params for obs i |
+
+For observables that carry a `point_mass` specification, the first element of
+their parameter block is `p0` (the point-mass fraction); the remaining elements
+are the transform and distribution parameters in their usual order. Use
+`n_fitted_params(obs_name)` to query the total count per observable.
 | `corr_start` | scalar int | `param_flat[..., corr_start:]` = Gaussian copula correlation upper-triangle |
 | `obs_names` | `(n_obs,)` | Observable names in regression order |
 | `scan_params` | `(N_0, …, N_{K-1}, n_phys)` | All resolved physics params (scan + derived) per point |

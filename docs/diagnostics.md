@@ -1,11 +1,18 @@
 # Diagnostics
 
-`src/diagnostics.py` produces 3-panel figures for each selected observable:
-- **Left**: raw distribution histogram
-- **Middle**: after all invertible transforms, with the fitted distribution overlaid
-- **Right**: final standard-normal mapped output, with N(0,1) overlaid
+`src/diagnostics.py` produces 4-panel figures for each selected observable:
+- **Panel 1**: raw distribution histogram
+- **Panel 2**: after all invertible transforms, with the fitted distribution overlaid
+- **Panel 3**: uniformized (PIT output) — should be U(0,1); includes a KS-test p-value
+- **Panel 4**: final standard-normal mapped output, with N(0,1) overlaid and χ²/dof
 
 A summary line reports how many events passed the range checks.
+
+For observables that use a `point_mass` specification, the figure additionally
+shows a dashed vertical line at the boundary value with the measured `p0` fraction
+labelled, and the suptitle includes `p0=<value>`. The middle panel is computed on
+continuous (non-PM) events only, so the transform is never applied to the boundary
+value itself.
 
 ## Generate a test TSV first
 

@@ -37,6 +37,7 @@ nWorkers         = 1       # C++ threads per point (keep 1 with outer parallelis
 n_outer_workers  = 48      # simultaneous grid points (ProcessPoolExecutor)
 checkpoint_every = 200     # save NPZ every N completions
 output_dir       = simulated
+# binary            = svj_regression   # optional; see "Truth vs. Delphes" below
 ```
 
 **To change which parameters are scanned** — move them between sections:
@@ -102,6 +103,44 @@ raw_grid_flat  shape (total_events, K)        — grid indices per axis (K = num
 > raw data is ~4096 × 2000 × 12 × 8 bytes ≈ **786 MB**. `*_raw.npz` is
 > gitignored for this reason.
 
+## Truth vs. Delphes: choosing the simulation engine
+
+By default the scan runs the truth-level binary (`svj_regression`): jets are
+clustered directly from stable Pythia8 final-state particles, with no
+detector resolution or reconstruction efficiency. A separate, parallel
+**Delphes-level stream** (`svj_regression_delphes`) is also available: it
+runs the same Hidden-Valley physics through a particle-level-only Delphes
+detector card (tracking/calorimeter smearing + efficiency, no jet-finder/
+MET/b-tagging/pileup) before computing the identical observable set on the
+reconstructed candidates. See `docs/setup_delphes.md` for the Delphes/ROOT
+build steps and architecture notes.
+
+Switch engines with one key in `[simulation]`:
+
+```ini
+[simulation]
+binary = svj_regression_delphes   # omit entirely (or set to svj_regression)
+                                    # for the default truth-level stream
+```
+
+`binary` is resolved relative to `src/generate_events/`. Switching away from
+the default truth binary automatically renames the output NPZ to
+`{binary}_scan.npz` (e.g. `svj_regression_delphes_scan.npz`) instead of
+`svj_scan.npz`, so the two streams can never collide or silently overwrite
+each other — you can keep both a truth scan and a Delphes scan side by side
+in the same `output_dir` and compare them directly.
+
+The scan's `svj_scan_meta.json` records which binary produced it, so
+`validate_grid.py` / `validate_production.py` automatically validate against
+the matching binary — no need to pass `--binary` yourself unless overriding
+(see `docs/validation.md`).
+
+Delphes-specific cfg keys (`delphes_card`, `jets_vis_only`, `dijet_only`,
+`vis_jet_pt_min`, `seed_offset`) live in `svj_regression_delphes.cfg`'s own
+defaults and are not part of `scan_regression.cfg`'s `[scan]`/`[fixed]`/
+`[derived]` zones; the Delphes binary is single-threaded (`nWorkers` is
+ignored), so all scan-level parallelism still comes from `n_outer_workers`.
+
 ## Select which observables to scan
 
 The default set is `DEFAULT_SCAN` in `src/observables.py` — every observable
@@ -114,6 +153,10 @@ tau1, tau2, tau3, dPhiMETclose, HT, Meff, leadJetMass, nConst
 
 28 base observables are available in total; see
 [extending-observables.md](extending-observables.md).
+
+Both `svj_regression` and `svj_regression_delphes` compute the full
+28-observable set, so any `DEFAULT_SCAN` or `--obs` selection works
+identically with either binary.
 
 Override from the command line with `--obs`:
 
@@ -211,8 +254,9 @@ python src/run_regression/scan_svj.py scan_regression.cfg --merge --n-jobs $N_JO
 To generate a large TSV with more events than a single node can produce in one
 run, use the TSV workflow. Each array task runs the full binary with the same
 physics parameters but a unique `seed_offset`, so the events are statistically
-independent. The total event count is `N_JOBS × nEvent` (where `nEvent` comes
-from `svj_regression.cfg`).
+independent. The total event count is `N_JOBS × nEvent`, where `nEvent` comes
+from the cfg belonging to the binary in use (`svj_regression.cfg`, or
+`svj_regression_delphes.cfg` when `SVJ_BINARY` selects the Delphes build).
 
 ```bash
 # 1. Submit the array (default: 4 tasks × nEvent events each):
@@ -231,6 +275,25 @@ bash merge_svj_tsv.sh 4 --keep-shards
 ```
 
 There is no DAGMan file, so the merge is a manual step after the array drains.
+
+**Delphes option.** Like the scan (see "Truth vs. Delphes" above),
+`run_svj_tsv.sh` can generate a Delphes-level TSV instead of the truth-level
+default: edit `BINARY_NAME="svj_regression_delphes"` near the top of the
+script (also drop `-c 16` to `-c 1` in the `#SBATCH` header — the Delphes
+binary is always single-threaded, so extra CPUs sit idle). The output
+filename tag is derived from the binary name so the two streams never
+collide: `svj_regression` → `jets_default(_N).tsv`, `svj_regression_delphes`
+→ `jets_delphes(_N).tsv`. Merge with the matching `--binary` flag:
+
+```bash
+bash merge_svj_tsv.sh 4 --binary svj_regression_delphes
+# -> simulated/tsv/jets_delphes.tsv
+```
+
+`svj_regression_delphes` never writes a kinematics TSV (unlike
+`svj_regression`, it has no `tsv_kin_file` key at all); `run_svj_tsv.sh`
+skips that override for it, and `merge_svj_tsv.sh` skips the kinematics
+merge step accordingly — no separate flag needed.
 
 **How seed isolation works:** the binary computes each worker's PYTHIA seed as
 

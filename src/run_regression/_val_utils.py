@@ -107,6 +107,9 @@ def load_scan(npz_path):
         'fixed_params':  meta['fixed_params'],
         'derived_exprs': meta['derived_exprs'],
         'interp':        interp,
+        # Binary the scan was generated with (older meta.json files predate
+        # this key -- default to the truth-level binary for backward compat).
+        'binary':        meta.get('binary', 'svj_regression'),
     }
 
 
@@ -189,7 +192,7 @@ def nearest_grid_point(scan, frac_idx):
 
 # ── PYTHIA runner ──────────────────────────────────────────────────────────────
 
-def run_pythia(full_params, n_events, seed_offset, task_tag):
+def run_pythia(full_params, n_events, seed_offset, task_tag, binary=BINARY):
     """
     Run the SVJ binary at full_params with n_events events.
 
@@ -199,6 +202,9 @@ def run_pythia(full_params, n_events, seed_offset, task_tag):
 
     task_tag is a unique string used to name the scratch files (avoids
     collisions between concurrent workers).
+
+    binary defaults to the truth-level binary; pass a different path
+    (e.g. the Delphes production binary) to validate a non-default scan.
 
     Returns
     -------
@@ -230,7 +236,7 @@ def run_pythia(full_params, n_events, seed_offset, task_tag):
             fh.write(f"seed_offset = {seed_offset}\n")
 
         proc = subprocess.run(
-            [BINARY, cfg_path], capture_output=True, text=True)
+            [binary, cfg_path], capture_output=True, text=True)
         if proc.returncode != 0:
             raise RuntimeError(
                 f"Binary exited with code {proc.returncode}.\n"

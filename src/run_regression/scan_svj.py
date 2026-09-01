@@ -23,7 +23,16 @@ At each grid point the pipeline is:
 Observable selection comes from src/observables.py DEFAULT_SCAN.  Override
 via --obs on the command line (comma-separated list of observable names).
 
-NPZ format (svj_scan.npz):
+Binary selection ([simulation] section, scan_regression.cfg):
+  binary = svj_regression            # default; omit entirely for no change
+  binary = svj_regression_delphes    # switch to the Delphes-level stream
+
+The binary name is resolved relative to src/generate_events/.  Switching away
+from the default binary automatically renames the output NPZ to
+'{binary}_scan.npz' (instead of 'svj_scan.npz') so the two streams can never
+collide or silently overwrite each other.
+
+NPZ format (svj_scan.npz, or '{binary}_scan.npz' for a non-default binary):
   axis_names       (K,)                names of the K scan axes (string array)
   {name}_vals      (N_k,)              grid values for each axis k
   param_flat       (N_0,...,N_{K-1}, total_params)
@@ -244,7 +253,8 @@ def _apply_transforms(X_raw, obs_selection, col_map):
         col      = col_map[obs_spec['col']]
         x_col    = X_raw[:, col].copy()
         y_std, params = fit_observable_col(x_col, obs_spec['pipeline'],
-                                           obs_spec['distribution'])
+                                           obs_spec['distribution'],
+                                           point_mass=obs_spec.get('point_mass'))
         p_start = int(offsets[i])
         p_end   = int(offsets[i + 1])
         flat_p[p_start:p_end] = params
@@ -264,7 +274,7 @@ def _worker(args):
     Run one grid point.
 
     args = (task_id, grid_indices, point_params, nEvent, nWorkers_inner,
-            obs_selection, save_raw)
+            obs_selection, save_raw, binary_path)
 
     Returns
     -------
@@ -272,7 +282,7 @@ def _worker(args):
     (grid_indices, None, None, None, None, cpp_peak_kb_or_0)              on failure
     """
     (task_id, grid_indices, point_params,
-     nEvent, nWorkers_inner, obs_selection, save_raw) = args
+     nEvent, nWorkers_inner, obs_selection, save_raw, binary_path) = args
 
     # tempfile.gettempdir() honours $TMPDIR.  Batch systems point that at
     # job-private scratch (HTCondor does so on lxplus), whereas worker-node
@@ -286,7 +296,7 @@ def _worker(args):
     write_point_cfg(temp_cfg, point_params, nEvent, nWorkers_inner, temp_tsv)
 
     try:
-        proc = subprocess.run([BINARY, temp_cfg], capture_output=True, text=True)
+        proc = subprocess.run([binary_path, temp_cfg], capture_output=True, text=True)
         # Capture C++ peak RSS immediately after binary exits (RUSAGE_CHILDREN
         # accumulates across all subprocess.run calls in this worker process).
         cpp_peak_kb = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
@@ -363,7 +373,7 @@ def _save(out_file, scan_cfg: ScanConfig,
 
 
 def _save_metadata(out_dir, scan_cfg: ScanConfig,
-                   obs_selection, obs_offsets, n_corr):
+                   obs_selection, obs_offsets, n_corr, binary_name):
     meta = {
         'obs_selection': list(obs_selection),
         'param_offsets': [int(x) for x in obs_offsets],
@@ -372,6 +382,9 @@ def _save_metadata(out_dir, scan_cfg: ScanConfig,
                           for name, vals in scan_cfg.scan_axes.items()},
         'fixed_params':  scan_cfg.fixed_params,
         'derived_exprs': scan_cfg.derived_exprs,
+        # Binary the scan was generated with -- lets validate_grid.py /
+        # validate_production.py auto-detect which binary to validate against.
+        'binary':        binary_name,
     }
     with open(out_dir / 'svj_scan_meta.json', 'w') as f:
         json.dump(meta, f, indent=2)
@@ -385,8 +398,8 @@ def _save_raw_npz(out_file, raw_flat, raw_grid_flat):
 
 # ── Merge helper ───────────────────────────────────────────────────────────────
 
-def _merge(out_dir, n_jobs, keep_shards=False):
-    files = [out_dir / f'svj_scan_{i}.npz' for i in range(n_jobs)]
+def _merge(out_dir, n_jobs, scan_tag, keep_shards=False):
+    files = [out_dir / f'{scan_tag}_{i}.npz' for i in range(n_jobs)]
     missing = [str(f) for f in files if not f.exists()]
     if missing:
         print(f"Error: missing files: {missing}")
@@ -405,7 +418,7 @@ def _merge(out_dir, n_jobs, keep_shards=False):
         param_flat[mask]  = pf[mask]
         scan_params[mask] = sp[mask]
 
-    out_file = out_dir / 'svj_scan.npz'
+    out_file = out_dir / f'{scan_tag}.npz'
     kwargs   = {
         'axis_names':       d0['axis_names'],
         'param_flat':       param_flat,
@@ -457,43 +470,49 @@ def main():
     n_jobs    = args.n_jobs
     save_raw  = args.save_raw
 
-    if args.merge:
-        # Resolve output_dir exactly as the scan below does, so --merge looks
-        # where the shards were actually written.  This was hardcoded to
-        # 'simulated', which meant redirecting output_dir silently produced
-        # shards in one place and a merge that searched another.
-        merge_root = 'simulated'
-        if os.path.exists(args.cfg):
-            merge_root = str(read_scan_cfg(args.cfg).sim_params.get(
-                'output_dir', 'simulated'))
-        out_dir = Path(merge_root) / 'svj'
-        out_dir.mkdir(parents=True, exist_ok=True)
-        _merge(out_dir, n_jobs, keep_shards=args.keep_shards)
-        return
-
     scan_cfg_path = args.cfg
-    if not os.path.exists(scan_cfg_path):
+    scan_cfg = None
+    if os.path.exists(scan_cfg_path):
+        scan_cfg = read_scan_cfg(scan_cfg_path)
+    elif not args.merge:
         print(f"Error: config file '{scan_cfg_path}' not found.")
         sys.exit(1)
-    if not os.path.exists(BINARY):
-        print(f"Error: binary '{BINARY}' not found. Run 'make svj_regression' first.")
-        sys.exit(1)
 
-    scan_cfg = read_scan_cfg(scan_cfg_path)
+    sp_ = scan_cfg.sim_params if scan_cfg is not None else {}
+
+    # ── Binary selection ───────────────────────────────────────────────────
+    # Default binary keeps the classic 'svj_scan.npz' name for full backward
+    # compatibility. Any other binary (e.g. svj_regression_delphes) gets its
+    # own '{binary}_scan.npz' name so the two streams can never collide.
+    binary_name = str(sp_.get('binary', 'svj_regression'))
+    binary_path = str(_SRC / 'generate_events' / binary_name)
+    scan_tag    = 'svj_scan' if binary_name == 'svj_regression' else f'{binary_name}_scan'
+
+    # ── Output paths ───────────────────────────────────────────────────────
+    # Resolved from the cfg for --merge as well, so a redirected output_dir
+    # cannot write shards in one place and then search another when merging.
+    # The merge and the scan agree on output_dir AND on scan_tag.
+    out_dir_str = sp_.get('output_dir', 'simulated')
+    out_dir     = Path(str(out_dir_str)) / 'svj'
+
+    if args.merge:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        _merge(out_dir, n_jobs, scan_tag, keep_shards=args.keep_shards)
+        return
+
+    if not os.path.exists(binary_path):
+        print(f"Error: binary '{binary_path}' not found. Run 'make {binary_name}' first.")
+        sys.exit(1)
 
     if not scan_cfg.scan_axes:
         print("Error: [scan] section is empty — nothing to scan.")
         sys.exit(1)
 
-    # ── Output paths ────────────────────────────────────────────────────────────
-    out_dir_str = scan_cfg.sim_params.get('output_dir', 'simulated')
-    out_dir     = Path(str(out_dir_str)) / 'svj'
-    fname       = f'svj_scan_{job_index}.npz' if n_jobs > 1 else 'svj_scan.npz'
-    out_file    = out_dir / fname
+    fname    = f'{scan_tag}_{job_index}.npz' if n_jobs > 1 else f'{scan_tag}.npz'
+    out_file = out_dir / fname
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Simulation settings ──────────────────────────────────────────────────────
-    sp_   = scan_cfg.sim_params
     nEvent       = int(sp_.get('nEvent',           50000))
     nWorkers_inn = int(sp_.get('nWorkers',             1))
     n_outer      = int(sp_.get('n_outer_workers',     32))
@@ -566,12 +585,13 @@ def main():
         # flat_idx is unique across all grid points — use it directly for /tmp filenames
         task_id = flat_idx
         tasks.append((task_id, gidx, point_params,
-                      nEvent, nWorkers_inn, obs_selection, save_raw))
+                      nEvent, nWorkers_inn, obs_selection, save_raw, binary_path))
 
     n_todo  = len(tasks)
     job_str = f"job {job_index}/{n_jobs-1}  " if n_jobs > 1 else ""
     grid_str = '×'.join(str(s) for s in axis_sizes)
     print(f"SVJ scan  {job_str}({n_outer} outer × {nWorkers_inn} C++ threads)")
+    print(f"  Binary:     {binary_name}")
     print(f"  Axes ({len(axis_names)}): {', '.join(f'{n}({s})' for n, s in zip(axis_names, axis_sizes))}")
     print(f"  Grid:       {grid_str} = {total} total  ({total // n_jobs} this job)")
     print(f"  Observables ({n_obs}): {obs_selection}")
@@ -585,7 +605,7 @@ def main():
 
     if n_todo == 0:
         print("Nothing left to do.")
-        _save_metadata(out_dir, scan_cfg, obs_selection, obs_offsets, n_corr)
+        _save_metadata(out_dir, scan_cfg, obs_selection, obs_offsets, n_corr, binary_name)
         return
 
     corr_start = int(obs_offsets[-1])
@@ -668,7 +688,7 @@ def main():
     if n_nan:
         print(f"  WARNING: {n_nan} grid points have NaN.")
 
-    _save_metadata(out_dir, scan_cfg, obs_selection, obs_offsets, n_corr)
+    _save_metadata(out_dir, scan_cfg, obs_selection, obs_offsets, n_corr, binary_name)
 
     if save_raw and raw_flat_list:
         raw_file = out_dir / (out_file.stem + '_raw.npz')

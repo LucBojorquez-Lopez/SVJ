@@ -1,5 +1,6 @@
 #include "Pythia8/Pythia.h"
 #include "fastjet/ClusterSequence.hh"
+#include "svj_observables_common.h"
 #include <sstream>
 #include <fstream>
 #include <vector>
@@ -56,23 +57,6 @@ static std::string cfgStr(const std::map<std::string,std::string>& cfg,
   auto it = cfg.find(key);
   return (it != cfg.end()) ? it->second : def;
 }
-
-// user_index tags
-static const int TAG_VIS  = 0;
-static const int TAG_MUON = 1;
-static const int TAG_INV  = 2;  // neutrinos (pid 12/14/16)
-static const int TAG_DARK = 3;  // dark pions/rhos (pid 51/53)
-
-// Per-event jet kinematics (visible 4-momentum for leading and subleading jet)
-struct JetKin {
-  int    n_jets;
-  double j1_px, j1_py, j1_pz, j1_E;
-  double j2_px, j2_py, j2_pz, j2_E;
-};
-
-// Invisible final-state particle (neutrino or dark) stored for geometric matching
-// into visible-only jets after clustering.
-struct InvisPtcl { double eta, phi, pt; int tag; };
 
 // Physics parameters
 static double mZ        = 2000.0;
@@ -213,9 +197,14 @@ static bool setupPythia(Pythia& pythia, int seed) {
 }
 
 // ── Observable names ─────────────────────────────────────────────────────────
-// ADD NEW OBSERVABLES HERE (step 1 of 2):
-//   1. Add the name string to OBS_NAMES (append at end to preserve existing order).
-//   2. Compute the observable in runWorker() and append it to data.push_back({...}).
+// ADD NEW OBSERVABLES HERE (step 1 of 3 -- observable computation itself lives
+// in the SHARED svj_observables_common.h, used identically by
+// svj_regression_delphes.cc, so a new observable is computed once, not twice):
+//   1. Add the field to SvjObservables and compute it in computeSvjObservables()
+//      (svj_observables_common.h).
+//   2. Add the name string to OBS_NAMES below (append at end to preserve order).
+//   3. Append the new SvjObservables field to the data.push_back({...}) in
+//      runWorker() below, in the same position as its OBS_NAMES entry.
 // The Python side (src/observables.py) reads column names from the TSV header at
 // runtime — no integer indices to synchronise.
 static const std::vector<std::string> OBS_NAMES = {
@@ -240,24 +229,19 @@ static void runWorker(int workerID, int nEvtWorker,
   if (!setupPythia(pythia, workerID + 1 + seedOffset * nWorkers)) return;
 
   Event& event = pythia.event;
-  fastjet::JetDefinition jet_def(fastjet::antikt_algorithm, jetR);
-
-  const double VIS_PT_MIN = visJetPtMin;
-  const double ETA_MAX    =  2.5;
-  const double PI         = std::acos(-1.0);
 
   for (int iEvent = 0; iEvent < nEvtWorker; ++iEvent) {
     if (!pythia.next()) continue;
 
-    std::vector<fastjet::PseudoJet> particles;
-    particles.reserve(event.size());
-    // Invisible particles (neutrinos + dark) stored for geometric matching
-    // into the visible-only jet cones after clustering.
-    std::vector<InvisPtcl> invis_ptcls;
-
-    // Tracked during particle loop
-    double max_ele_pt = 0.0, max_mu_pt = 0.0;
-    double s_xx = 0, s_xy = 0, s_yy = 0, s_pt2 = 0;  // sphericity tensor sums
+    // ── Classify final-state particles into the shared SvjJetInputs form
+    //    (TAG_VIS/TAG_MUON particles for clustering; neutrinos/dark particles
+    //    kept separately for the geometric nInvClose/fInv matching inside
+    //    computeSvjObservables()) -- this classification step is inherently
+    //    truth-specific (raw Pythia8::Particle -> tag), so it stays here
+    //    rather than in the shared header; svj_regression_delphes.cc has its
+    //    own analogous classification from Delphes candidates instead. ─────
+    SvjJetInputs inputs;
+    inputs.particles.reserve(event.size());
 
     for (int i = 0; i < event.size(); ++i) {
       const Particle& p = event[i];
@@ -279,17 +263,17 @@ static void runWorker(int workerID, int nEvtWorker,
       // Max electron and muon pT (from final-state particles)
       if (aid == 11) {
         double ept = std::sqrt(p.px()*p.px() + p.py()*p.py());
-        if (ept > max_ele_pt) max_ele_pt = ept;
+        if (ept > inputs.max_ele_pt) inputs.max_ele_pt = ept;
       }
       if (aid == 13) {
         double mpt = std::sqrt(p.px()*p.px() + p.py()*p.py());
-        if (mpt > max_mu_pt) max_mu_pt = mpt;
+        if (mpt > inputs.max_mu_pt) inputs.max_mu_pt = mpt;
       }
       // Event-level transverse sphericity tensor: all visible+muon particles
       if (ptag < TAG_INV) {
         double px = p.px(), py = p.py();
-        s_xx += px*px; s_xy += px*py; s_yy += py*py;
-        s_pt2 += px*px + py*py;
+        inputs.s_xx += px*px; inputs.s_xy += px*py; inputs.s_yy += py*py;
+        inputs.s_pt2 += px*px + py*py;
       }
 
       if (ptag < TAG_INV) {
@@ -297,7 +281,7 @@ static void runWorker(int workerID, int nEvtWorker,
         // determined purely by detectable particles.
         fastjet::PseudoJet pj(p.px(), p.py(), p.pz(), p.e());
         pj.set_user_index(ptag);
-        particles.push_back(pj);
+        inputs.particles.push_back(pj);
       } else {
         // Neutrinos (TAG_INV) + dark pions/rhos (TAG_DARK): store kinematics
         // for geometric matching into the visible-only jet cones below.
@@ -306,471 +290,28 @@ static void runWorker(int workerID, int nEvtWorker,
         double pm = std::sqrt(px*px + py*py + pz*pz);
         double eta = (pm > std::fabs(pz)) ? 0.5*std::log((pm+pz)/(pm-pz))
                                           : (pz > 0 ? 1e9 : -1e9);
-        invis_ptcls.push_back({eta, std::atan2(py, px), pt, ptag});
+        inputs.invis_ptcls.push_back({eta, std::atan2(py, px), pt, ptag});
       }
     }
 
-    fastjet::ClusterSequence cs(particles, jet_def);
-    std::vector<fastjet::PseudoJet> raw_jets =
-      fastjet::sorted_by_pt(cs.inclusive_jets(1.0));
+    SvjObservables obs;
+    JetKin jk;
+    bool ok = computeSvjObservables(inputs, jetR, visJetPtMin, /*etaMax=*/2.5,
+                                    jetsVisOnly != 0, dijetOnly != 0, obs, &jk);
+    if (!ok) continue;
 
-    double evt_vis_px = 0, evt_vis_py = 0;
-    int    n_jets = 0;
-    double lead_vis_pt = -1.0, sub_vis_pt = -1.0;  // visible-pT ordering for new observables
-    double lead_cut_pt = -1.0, sub_cut_pt = -1.0;  // ordering pT for kinematics TSV
-    double lead_width  =  0.0;
-    double j1_vis_px = 0, j1_vis_py = 0;   // leading visible-pT jets (for dijet phi)
-    double j2_vis_px = 0, j2_vis_py = 0;
-    double j1_px=0, j1_py=0, j1_pz=0, j1_E=0;
-    double j2_px=0, j2_py=0, j2_pz=0, j2_E=0;
-    std::vector<std::array<double,4>> lead_constits;          // visible constituents of leading jet (substructure)
-    std::vector<std::array<double,4>> all_vis_constits;       // visible constituents of ALL passing jets (hemispheres)
-    std::vector<std::pair<double,double>> jet_vis_vecs;       // (vis_px, vis_py) per passing jet
-    std::vector<std::pair<double,double>> jet_axes;           // (eta, phi) of visible jet axis per passing jet
-    std::vector<int> jet_inv_counts;                          // dark particle count per passing jet (geometric)
-    int lead_vis_idx = 0;
-
-    for (const auto& jet : raw_jets) {
-      if (std::fabs(jet.eta()) >= ETA_MAX) continue;
-
-      double vis_px = 0, vis_py = 0, vis_pz = 0, vis_E = 0;
-      double width_num = 0, width_den = 0;
-
-      for (const auto& c : jet.constituents()) {
-        if (c.user_index() >= TAG_INV) continue;   // muons (TAG_MUON) count as visible
-
-        vis_px += c.px();
-        vis_py += c.py();
-        vis_pz += c.pz();
-        vis_E  += c.e();
-
-        double dR = jet.delta_R(c);
-        width_num += c.pt() * dR;
-        width_den += c.pt();
-      }
-
-      double vis_pt = std::sqrt(vis_px*vis_px + vis_py*vis_py);
-      if (vis_pt < VIS_PT_MIN) continue;
-
-      evt_vis_px += vis_px;
-      evt_vis_py += vis_py;
-      ++n_jets;
-
-      jet_vis_vecs.emplace_back(vis_px, vis_py);
-      jet_axes.emplace_back(jet.eta(), jet.phi());
-      // Count dark pions/rhos (TAG_DARK) within this jet's cone via geometric
-      // matching — jet.constituents() no longer contains invisible particles.
-      int n_dark = 0;
-      {
-        double ja_eta = jet.eta(), ja_phi = jet.phi();
-        for (const auto& ip : invis_ptcls) {
-          if (ip.tag != TAG_DARK) continue;
-          double deta = ip.eta - ja_eta;
-          double dphi = ip.phi - ja_phi;
-          if (dphi >  PI) dphi -= 2*PI;
-          if (dphi < -PI) dphi += 2*PI;
-          if (std::sqrt(deta*deta + dphi*dphi) < jetR) ++n_dark;
-        }
-      }
-      jet_inv_counts.push_back(n_dark);
-
-      // Accumulate all visible constituents for event-level hemisphere masses
-      for (const auto& c2 : jet.constituents()) {
-        if (c2.user_index() >= TAG_INV) continue;
-        all_vis_constits.push_back({c2.px(), c2.py(), c2.pz(), c2.e()});
-      }
-
-      // Track leading visible-pT jet for regression + substructure observables
-      if (vis_pt > lead_vis_pt) {
-        j2_vis_px = j1_vis_px; j2_vis_py = j1_vis_py;
-        sub_vis_pt  = lead_vis_pt;
-        j1_vis_px   = vis_px;  j1_vis_py = vis_py;
-        lead_vis_pt = vis_pt;
-        lead_vis_idx = (int)jet_vis_vecs.size() - 1;
-        lead_width  = (width_den > 0) ? width_num / width_den : 0.0;
-        // Save visible constituents of leading jet for substructure (E2C, E3C, tauN)
-        lead_constits.clear();
-        for (const auto& c2 : jet.constituents()) {
-          if (c2.user_index() >= TAG_INV) continue;
-          lead_constits.push_back({c2.px(), c2.py(), c2.pz(), c2.e()});
-        }
-      } else if (vis_pt > sub_vis_pt) {
-        j2_vis_px = vis_px; j2_vis_py = vis_py;
-        sub_vis_pt = vis_pt;
-      }
-
-      // 4-momentum and ordering for kinematics TSV: visible or full jet
-      double cut_pt = jetsVisOnly ? vis_pt : jet.pt();
-      double kx = jetsVisOnly ? vis_px : jet.px();
-      double ky = jetsVisOnly ? vis_py : jet.py();
-      double kz = jetsVisOnly ? vis_pz : jet.pz();
-      double ke = jetsVisOnly ? vis_E  : jet.e();
-
-      if (cut_pt > lead_cut_pt) {
-        j2_px = j1_px; j2_py = j1_py; j2_pz = j1_pz; j2_E = j1_E;
-        sub_cut_pt = lead_cut_pt;
-        j1_px = kx; j1_py = ky; j1_pz = kz; j1_E = ke;
-        lead_cut_pt = cut_pt;
-      } else if (cut_pt > sub_cut_pt) {
-        j2_px = kx; j2_py = ky; j2_pz = kz; j2_E = ke;
-        sub_cut_pt = cut_pt;
-      }
-    }
-
-    if (n_jets < 1) continue;
-    if (dijetOnly && n_jets < 2) continue;
-
-    double met     = std::sqrt(evt_vis_px*evt_vis_px + evt_vis_py*evt_vis_py);
-    double met_phi = std::atan2(-evt_vis_py, -evt_vis_px);
-
-    // ── H_T, R_T, M_eff ──────────────────────────────────────────────────────
-    double HT = 0.0;
-    for (const auto& jvv : jet_vis_vecs)
-      HT += std::sqrt(jvv.first*jvv.first + jvv.second*jvv.second);
-    double RT   = (HT > 0) ? met / HT : 0.0;
-    double Meff = HT + met;
-
-    // ── Transverse sphericity S_T = 2*lambda_min of the 2x2 sphericity tensor ──
-    // Tensor S^{ab} = sum(p_a*p_b) / sum(pT^2), trace = 1, so S_T = 2*lambda_min.
-    double spher = 0.0;
-    if (s_pt2 > 0) {
-      double a = s_xx/s_pt2, b = s_xy/s_pt2, c = s_yy/s_pt2;
-      double disc = 1.0 - 4.0*(a*c - b*b);
-      spher = 2.0 * (disc > 0 ? (1.0 - std::sqrt(disc)) / 2.0 : 0.5);
-    }
-
-    // ── Jet thrust (leading jet) and event-level hemisphere masses ──
-    // jetThrust: T = max_{nhat} sum_i |pT_i . nhat| / sum_i |pT_i|  over leading-jet constituents.
-    // hemiMass1/2: split ALL visible event particles along the event-level transverse thrust axis.
-    double thrust = 0.0, hemi_mass1 = 0.0, hemi_mass2 = 0.0;
-    if (!lead_constits.empty()) {
-      double pt_sum = 0;
-      for (auto& c : lead_constits)
-        pt_sum += std::sqrt(c[0]*c[0] + c[1]*c[1]);
-      if (pt_sum > 0) {
-        for (auto& ac : lead_constits) {
-          double anorm = std::sqrt(ac[0]*ac[0] + ac[1]*ac[1]);
-          if (anorm == 0) continue;
-          double nx = ac[0]/anorm, ny = ac[1]/anorm;
-          double T_cand = 0;
-          for (auto& c : lead_constits)
-            T_cand += std::fabs(c[0]*nx + c[1]*ny);
-          T_cand /= pt_sum;
-          if (T_cand > thrust) thrust = T_cand;
-        }
-      }
-    }
-    if (!all_vis_constits.empty()) {
-      // Event-level transverse thrust axis for hemisphere splitting
-      double pt_sum_ev = 0;
-      for (auto& c : all_vis_constits)
-        pt_sum_ev += std::sqrt(c[0]*c[0] + c[1]*c[1]);
-
-      double tx = 1.0, ty = 0.0, best_T = -1.0;
-      if (pt_sum_ev > 0) {
-        for (auto& ac : all_vis_constits) {
-          double anorm = std::sqrt(ac[0]*ac[0] + ac[1]*ac[1]);
-          if (anorm == 0) continue;
-          double nx = ac[0]/anorm, ny = ac[1]/anorm;
-          double T_cand = 0;
-          for (auto& c : all_vis_constits)
-            T_cand += std::fabs(c[0]*nx + c[1]*ny);
-          T_cand /= pt_sum_ev;
-          if (T_cand > best_T) { best_T = T_cand; tx = nx; ty = ny; }
-        }
-      }
-
-      // Split all visible event particles into hemispheres along event thrust axis
-      double h1_px=0, h1_py=0, h1_pz=0, h1_E=0;
-      double h2_px=0, h2_py=0, h2_pz=0, h2_E=0;
-      for (auto& c : all_vis_constits) {
-        if (c[0]*tx + c[1]*ty >= 0) {
-          h1_px += c[0]; h1_py += c[1]; h1_pz += c[2]; h1_E += c[3];
-        } else {
-          h2_px += c[0]; h2_py += c[1]; h2_pz += c[2]; h2_E += c[3];
-        }
-      }
-      auto massOf = [](double px, double py, double pz, double E) -> double {
-        double m2 = E*E - px*px - py*py - pz*pz;
-        return m2 > 0 ? std::sqrt(m2) : 0.0;
-      };
-      hemi_mass1 = massOf(h1_px, h1_py, h1_pz, h1_E);
-      hemi_mass2 = massOf(h2_px, h2_py, h2_pz, h2_E);
-      if (hemi_mass1 < hemi_mass2) std::swap(hemi_mass1, hemi_mass2);
-    }
-
-    // ── pT balance: |pT_close + pT_far| / (pT_close + pT_far) ──
-    // close/far = jet with smallest/largest delta-phi to MET, over all passing jets.
-    double pt_bal = 0.0;
-    if (n_jets >= 2) {
-      double min_dphi = 4.0, max_dphi = -1.0;
-      int close_idx = 0, far_idx = 0;
-      for (int jj = 0; jj < (int)jet_vis_vecs.size(); ++jj) {
-        double jphi = std::atan2(jet_vis_vecs[jj].second, jet_vis_vecs[jj].first);
-        double dphi = std::fabs(jphi - met_phi);
-        if (dphi > PI) dphi = 2*PI - dphi;
-        if (dphi < min_dphi) { min_dphi = dphi; close_idx = jj; }
-        if (dphi > max_dphi) { max_dphi = dphi; far_idx   = jj; }
-      }
-      double vx = jet_vis_vecs[close_idx].first  + jet_vis_vecs[far_idx].first;
-      double vy = jet_vis_vecs[close_idx].second + jet_vis_vecs[far_idx].second;
-      double vmag = std::sqrt(vx*vx + vy*vy);
-      double pt_c = std::sqrt(jet_vis_vecs[close_idx].first*jet_vis_vecs[close_idx].first
-                            + jet_vis_vecs[close_idx].second*jet_vis_vecs[close_idx].second);
-      double pt_f = std::sqrt(jet_vis_vecs[far_idx].first*jet_vis_vecs[far_idx].first
-                            + jet_vis_vecs[far_idx].second*jet_vis_vecs[far_idx].second);
-      if (pt_c + pt_f > 0) pt_bal = vmag / (pt_c + pt_f);
-    }
-
-    // ── delta-phi(MET, dijet): azimuthal angle between MET and j1+j2 ──
-    double dphi_met_dijet = 0.0;
-    if (n_jets >= 2) {
-      double dijet_phi = std::atan2(j1_vis_py + j2_vis_py, j1_vis_px + j2_vis_px);
-      double dphi = std::fabs(dijet_phi - met_phi);
-      if (dphi > PI) dphi = 2*PI - dphi;
-      dphi_met_dijet = dphi;
-    }
-
-    // ── delta-phi(closest/furthest jet to MET, MET) ──
-    // Signed: dphi = jet_phi - met_phi, wrapped to (-pi, pi].
-    // Close/far determined by |dphi|; stored values are signed.
-    double dphi_met_close = 0.0, dphi_met_far = 0.0;
-    int close_idx = 0;
-    if (n_jets >= 1) {
-      double min_abs = 4.0, max_abs = -1.0;
-      for (int jj = 0; jj < (int)jet_vis_vecs.size(); ++jj) {
-        double jphi = std::atan2(jet_vis_vecs[jj].second, jet_vis_vecs[jj].first);
-        double dphi = jphi - met_phi;
-        if (dphi >  PI) dphi -= 2*PI;
-        if (dphi < -PI) dphi += 2*PI;
-        double adphi = std::fabs(dphi);
-        if (adphi < min_abs) { min_abs = adphi; dphi_met_close = dphi; close_idx = jj; }
-        if (adphi > max_abs) { max_abs = adphi; dphi_met_far   = dphi; }
-      }
-    }
-
-    // ── is closest jet the leading-pT jet? / dark particle count in closest jet ──
-    double close_jet_is_lead = 0.0;
-    double n_inv_close       = 0.0;
-    if (n_jets >= 1) {
-      close_jet_is_lead = (close_idx == lead_vis_idx) ? 1.0 : 0.0;
-      n_inv_close       = (double)jet_inv_counts[close_idx];
-    }
-
-    // ── f_inv: invisible pT fraction of leading jet (geometric matching) ──────
-    // Sums pT of all invisible particles (neutrinos + dark) within the leading
-    // jet's cone; denominator is the full jet pT (vis + invisible).
-    double f_inv = 0.0;
-    if (n_jets >= 1) {
-      double la_eta = jet_axes[lead_vis_idx].first;
-      double la_phi = jet_axes[lead_vis_idx].second;
-      double inv_pt = 0.0;
-      for (const auto& ip : invis_ptcls) {
-        double deta = ip.eta - la_eta;
-        double dphi = ip.phi - la_phi;
-        if (dphi >  PI) dphi -= 2*PI;
-        if (dphi < -PI) dphi += 2*PI;
-        if (std::sqrt(deta*deta + dphi*dphi) < jetR) inv_pt += ip.pt;
-      }
-      f_inv = (lead_vis_pt + inv_pt > 0) ? inv_pt / (lead_vis_pt + inv_pt) : 0.0;
-    }
-
-    // ── Energy Correlators and N-subjettiness (leading visible-pT jet) ──
-    // z_i = pT_i / sum_pT  (pT fractions, visible+muon constituents only)
-    // E2C = sum_{i<j}   z_i z_j dR_ij                         (beta=1, R=1)
-    // E3C = sum_{i<j<k} z_i z_j z_k * dR_ij * dR_ik * dR_jk  (product of 3 angles)
-    // tau_N = sum_i z_i * min_k(dR(i, axis_k))                (kT-seeded k-means axes, beta=1)
-    double e2c = 0, e3c = 0, tau1 = 0, tau2 = 0, tau3 = 0;
-    {
-      int nc = (int)lead_constits.size();
-      if (nc > 0) {
-        std::vector<double> pt_c(nc), eta_c(nc), phi_c(nc), z_c(nc);
-        double pt_sum_c = 0;
-        for (int ii = 0; ii < nc; ++ii) {
-          double px = lead_constits[ii][0], py = lead_constits[ii][1],
-                 pz = lead_constits[ii][2];
-          double pt = std::sqrt(px*px + py*py);
-          double p  = std::sqrt(px*px + py*py + pz*pz);
-          pt_c[ii]  = pt;
-          phi_c[ii] = std::atan2(py, px);
-          eta_c[ii] = (p > std::fabs(pz))
-                    ? 0.5*std::log((p+pz)/(p-pz)) : (pz > 0 ? 1e9 : -1e9);
-          pt_sum_c += pt;
-        }
-        if (pt_sum_c > 0)
-          for (int ii = 0; ii < nc; ++ii) z_c[ii] = pt_c[ii] / pt_sum_c;
-
-        // Precompute pairwise dR (shared by E2C, E3C, and subjettiness axis search)
-        std::vector<std::vector<double>> dRmat(nc, std::vector<double>(nc, 0.0));
-        for (int ii = 0; ii < nc; ++ii) {
-          for (int jj = ii+1; jj < nc; ++jj) {
-            double deta = eta_c[ii] - eta_c[jj];
-            double dphi = phi_c[ii] - phi_c[jj];
-            if (dphi >  PI) dphi -= 2*PI;
-            if (dphi < -PI) dphi += 2*PI;
-            dRmat[ii][jj] = dRmat[jj][ii] = std::sqrt(deta*deta + dphi*dphi);
-          }
-        }
-
-        // E2C
-        for (int ii = 0; ii < nc; ++ii)
-          for (int jj = ii+1; jj < nc; ++jj)
-            e2c += z_c[ii] * z_c[jj] * dRmat[ii][jj];
-
-        // E3C: product of all three pairwise angles
-        for (int ii = 0; ii < nc; ++ii)
-          for (int jj = ii+1; jj < nc; ++jj)
-            for (int kk = jj+1; kk < nc; ++kk)
-              e3c += z_c[ii] * z_c[jj] * z_c[kk]
-                   * dRmat[ii][jj] * dRmat[ii][kk] * dRmat[jj][kk];
-
-        // tau_N: kT-seeded k-means N-subjettiness (beta=1).
-        // For N>1, two seeds are tried: the standard kT exclusive_jets(N) seed, and a
-        // warm-start seeded with the previous level's converged axes plus the Nth kT jet.
-        // At initialisation the warm-start satisfies tau_N <= tau_{N-1} (the extra axis
-        // can only reduce each constituent's minimum distance), so k-means converges to
-        // a result <= tau_{N-1} — no post-hoc clamping required.
-        std::vector<fastjet::PseudoJet> cpjs;
-        cpjs.reserve(nc);
-        for (auto& c : lead_constits)
-          cpjs.emplace_back(c[0], c[1], c[2], c[3]);
-
-        fastjet::JetDefinition kt_def(fastjet::kt_algorithm, 1.0);
-        fastjet::ClusterSequence cs_sub(cpjs, kt_def);
-
-        // Run k-means from given axes (modified in-place); returns converged tau.
-        auto run_kmeans = [&](int N,
-                              std::vector<double>& ax_eta,
-                              std::vector<double>& ax_phi) -> double {
-          for (int iter = 0; iter < 100; ++iter) {
-            std::vector<int> asgn(nc, 0);
-            for (int ii = 0; ii < nc; ++ii) {
-              double min_d = 1e30;
-              for (int k = 0; k < N; ++k) {
-                double deta = eta_c[ii] - ax_eta[k];
-                double dphi = phi_c[ii] - ax_phi[k];
-                if (dphi >  PI) dphi -= 2*PI;
-                if (dphi < -PI) dphi += 2*PI;
-                double d = std::sqrt(deta*deta + dphi*dphi);
-                if (d < min_d) { min_d = d; asgn[ii] = k; }
-              }
-            }
-            std::vector<double> spx(N,0), spy(N,0), spz(N,0);
-            for (int ii = 0; ii < nc; ++ii) {
-              int k = asgn[ii];
-              spx[k] += lead_constits[ii][0];
-              spy[k] += lead_constits[ii][1];
-              spz[k] += lead_constits[ii][2];
-            }
-            double max_shift = 0.0;
-            for (int k = 0; k < N; ++k) {
-              double pt2 = spx[k]*spx[k] + spy[k]*spy[k];
-              double p2  = pt2 + spz[k]*spz[k];
-              if (pt2 < 1e-20 || p2 < 1e-20) continue;
-              double p = std::sqrt(p2);
-              double new_eta = (p > std::fabs(spz[k]))
-                               ? 0.5*std::log((p+spz[k])/(p-spz[k]))
-                               : (spz[k] > 0 ? 1e9 : -1e9);
-              double new_phi = std::atan2(spy[k], spx[k]);
-              double deta = new_eta - ax_eta[k];
-              double dphi = new_phi - ax_phi[k];
-              if (dphi >  PI) dphi -= 2*PI;
-              if (dphi < -PI) dphi += 2*PI;
-              double shift = std::sqrt(deta*deta + dphi*dphi);
-              if (shift > max_shift) max_shift = shift;
-              ax_eta[k] = new_eta;
-              ax_phi[k] = new_phi;
-            }
-            if (max_shift < 1e-6) break;
-          }
-          double tau = 0;
-          for (int ii = 0; ii < nc; ++ii) {
-            double min_d = 1e30;
-            for (int k = 0; k < N; ++k) {
-              double deta = eta_c[ii] - ax_eta[k];
-              double dphi = phi_c[ii] - ax_phi[k];
-              if (dphi >  PI) dphi -= 2*PI;
-              if (dphi < -PI) dphi += 2*PI;
-              double d = std::sqrt(deta*deta + dphi*dphi);
-              if (d < min_d) min_d = d;
-            }
-            tau += z_c[ii] * min_d;
-          }
-          return tau;
-        };
-
-        // tau1: single kT seed; ax1e/ax1p hold converged axis for tau2 warm-start
-        std::vector<double> ax1e, ax1p;
-        if (nc >= 1) {
-          auto s1 = cs_sub.exclusive_jets(1);
-          ax1e = {s1[0].eta()};
-          ax1p = {s1[0].phi()};
-          tau1 = run_kmeans(1, ax1e, ax1p);
-        }
-
-        // tau2: kT seed AND warm-start [ax1_opt, kT-2nd]; ax2e/ax2p hold best axes
-        std::vector<double> ax2e, ax2p;
-        if (nc >= 2) {
-          auto s2 = cs_sub.exclusive_jets(2);
-
-          std::vector<double> e2a = {s2[0].eta(), s2[1].eta()};
-          std::vector<double> p2a = {s2[0].phi(), s2[1].phi()};
-          double tau2a = run_kmeans(2, e2a, p2a);
-
-          // Warm-start: ax1 optimum + kT-2nd jet.  Initial tau <= tau1 by construction.
-          std::vector<double> e2b = {ax1e[0], s2[1].eta()};
-          std::vector<double> p2b = {ax1p[0], s2[1].phi()};
-          double tau2b = run_kmeans(2, e2b, p2b);
-
-          if (tau2a <= tau2b) { tau2 = tau2a; ax2e = e2a; ax2p = p2a; }
-          else                { tau2 = tau2b; ax2e = e2b; ax2p = p2b; }
-        }
-
-        // tau3: kT seed AND warm-start [ax2_opt_0, ax2_opt_1, kT-3rd]
-        if (nc >= 3) {
-          auto s3 = cs_sub.exclusive_jets(3);
-
-          std::vector<double> e3a = {s3[0].eta(), s3[1].eta(), s3[2].eta()};
-          std::vector<double> p3a = {s3[0].phi(), s3[1].phi(), s3[2].phi()};
-          double tau3a = run_kmeans(3, e3a, p3a);
-
-          // Warm-start: both ax2 optima + kT-3rd jet.  Initial tau <= tau2 by construction.
-          std::vector<double> e3b = {ax2e[0], ax2e[1], s3[2].eta()};
-          std::vector<double> p3b = {ax2p[0], ax2p[1], s3[2].phi()};
-          double tau3b = run_kmeans(3, e3b, p3b);
-
-          tau3 = std::min(tau3a, tau3b);
-        }
-      }
-    }
-
-    // ── Leading jet invariant mass and constituent multiplicity ──────────────
-    double lead_jet_mass = 0.0;
-    double n_const       = 0.0;
-    if (!lead_constits.empty()) {
-      double mpx = 0, mpy = 0, mpz = 0, mE = 0;
-      for (const auto& c : lead_constits) {
-        mpx += c[0]; mpy += c[1]; mpz += c[2]; mE += c[3];
-      }
-      double m2 = mE*mE - mpx*mpx - mpy*mpy - mpz*mpz;
-      lead_jet_mass = (m2 > 0) ? std::sqrt(m2) : 0.0;
-      n_const = (double)lead_constits.size();
-    }
-
-    // ADD NEW OBSERVABLE COMPUTATIONS ABOVE THIS LINE, then append to push_back below.
-    // Keep push_back values in the same order as OBS_NAMES.
-    data.push_back({lead_vis_pt, lead_width, met,
-                    max_ele_pt, max_mu_pt, thrust,
-                    spher, hemi_mass1, hemi_mass2,
-                    pt_bal, dphi_met_dijet,
-                    e2c, e3c, tau1, tau2, tau3,
-                    dphi_met_close, dphi_met_far, (double)n_jets,
-                    close_jet_is_lead, n_inv_close, met_phi,
-                    HT, RT, Meff,
-                    lead_jet_mass, n_const, f_inv});
-    jetData.push_back({n_jets,
-                       j1_px, j1_py, j1_pz, j1_E,
-                       j2_px, j2_py, j2_pz, j2_E});
+    // ADD NEW OBSERVABLE COMPUTATIONS in svj_observables_common.h, then
+    // append to push_back below in the same position as OBS_NAMES.
+    data.push_back({obs.leadVisPt, obs.leadWidth, obs.MET,
+                    obs.maxElePt, obs.maxMuPt, obs.jetThrust,
+                    obs.transSphericity, obs.hemiMass1, obs.hemiMass2,
+                    obs.ptBal, obs.dPhiMETdijet,
+                    obs.e2c, obs.e3c, obs.tau1, obs.tau2, obs.tau3,
+                    obs.dPhiMETclose, obs.dPhiMETfar, obs.nJets,
+                    obs.closeJetIsLead, obs.nInvClose, obs.metPhi,
+                    obs.HT, obs.RT, obs.Meff,
+                    obs.leadJetMass, obs.nConst, obs.fInv});
+    jetData.push_back(jk);
   }
 }
 

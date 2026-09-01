@@ -132,7 +132,8 @@ def main():
         x_fit = x_fit[np.isfinite(x_fit)]   # guard against any stray non-finite
 
         _, fitted = fit_observable_col(
-            x_fit, obs_spec['pipeline'], obs_spec['distribution'])
+            x_fit, obs_spec['pipeline'], obs_spec['distribution'],
+            point_mass=obs_spec.get('point_mass'))
 
         p0, p1 = int(offsets[i]), int(offsets[i + 1])
         all_fitted[p0:p1] = fitted
@@ -140,7 +141,8 @@ def main():
         # Draw N1 independent marginal samples (no copula; marginals only)
         u = rng.uniform(0.0, 1.0, args.N1)
         model_cols[:, i] = inverse_observable_col(
-            u, obs_spec['pipeline'], obs_spec['distribution'], fitted)
+            u, obs_spec['pipeline'], obs_spec['distribution'], fitted,
+            point_mass=obs_spec.get('point_mass'))
 
         truth_cols[:, i] = truth[:, tsv_col]
         halfA_cols[:, i] = half_A[:, tsv_col]

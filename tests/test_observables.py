@@ -15,6 +15,7 @@ Covers:
   - inverse_observable_col(): roundtrip recovers original data to < 0.1% error;
     monotone order is preserved.
   - load_tsv(): parses header and numerical data correctly.
+  - TestPointMassMixture: mixture-distribution (point_mass) functionality.
 
 No PYTHIA binary required.
 """
@@ -117,8 +118,8 @@ class TestNFittedParams:
         assert n_fitted_params('jetThrust') == 4
 
     def test_dPhiMETclose(self):
-        # abs_value (0) + boxcox (1) + gennorm (3) = 4
-        assert n_fitted_params('dPhiMETclose') == 4
+        # abs_value (0) + boxcox (1) + gennorm (3) + p0 (1) = 5
+        assert n_fitted_params('dPhiMETclose') == 5
 
     def test_dPhiMETfar(self):
         # abs_value (0) + affine_flip (0) + boxcox (1) + gennorm (3) = 4
@@ -136,6 +137,8 @@ class TestNFittedParams:
                 continue
             manual = sum(TRANSFORMS[t]['n_fitted'] for t, _ in spec['pipeline'])
             manual += DISTRIBUTIONS[spec['distribution']]['n_params']
+            if spec.get('point_mass') is not None:
+                manual += 1   # p0 stored as first parameter
             assert n_fitted_params(name) == manual, (
                 f"'{name}': n_fitted_params mismatch (expected {manual})")
 
@@ -478,3 +481,211 @@ class TestLoadTsv:
         data, col_map = load_tsv(fname)
         # np.loadtxt returns a 0-D scalar for a 1×1 file; float() unwraps it
         assert float(data) == pytest.approx(42.0)
+
+
+# ── Point-mass mixture ─────────────────────────────────────────────────────────
+
+_PM_SPEC_ZERO = {'value': 0.0, 'tol': 1e-10, 'symmetric': False, 'min_p0': 0.01}
+_PM_SPEC_PI   = {'value': np.pi, 'tol': 1e-8, 'symmetric': True,  'min_p0': 0.01}
+
+
+def _make_pm_data(rng, n=500, p0=0.3, pm_val=0.0):
+    """Lognormal continuous + fraction p0 at pm_val."""
+    n_pm   = int(n * p0)
+    n_cont = n - n_pm
+    cont   = rng.lognormal(mean=4.0, sigma=0.5, size=n_cont)
+    return np.concatenate([np.full(n_pm, pm_val), cont])
+
+
+class TestPointMassMixture:
+
+    # ── _check_point_mass (tested via public API) ──────────────────────────
+
+    def test_n_fitted_adds_one_for_pm(self):
+        # maxMuPt: boxcox(1) + gennorm(3) + p0(1) = 5
+        assert n_fitted_params('maxMuPt') == 5
+
+    def test_n_fitted_no_pm_unchanged(self):
+        # leadVisPt has no point_mass: boxcox(1) + gennorm(3) = 4
+        assert n_fitted_params('leadVisPt') == 4
+
+    def test_param_offsets_with_pm(self):
+        names   = ['leadVisPt', 'maxMuPt']
+        offsets = param_offsets(names)
+        assert offsets[0] == 0
+        assert offsets[1] == 4    # leadVisPt: no PM
+        assert offsets[2] == 4 + 5   # maxMuPt: +1 for p0
+
+    # ── fit_observable_col with point_mass ─────────────────────────────────
+
+    def test_p0_stored_as_first_param(self):
+        rng  = np.random.default_rng(1)
+        x    = _make_pm_data(rng, n=600, p0=0.25)
+        _, params = fit_observable_col(x, [('boxcox', {})], 'gennorm',
+                                       point_mass=_PM_SPEC_ZERO, rng=rng)
+        assert len(params) == 5               # p0 + lam + beta + mu + sigma
+        assert params[0] == pytest.approx(0.25, abs=0.05)
+
+    def test_y_std_shape_preserved(self):
+        rng = np.random.default_rng(2)
+        x   = _make_pm_data(rng, n=400, p0=0.2)
+        y_std, _ = fit_observable_col(x, [('boxcox', {})], 'gennorm',
+                                      point_mass=_PM_SPEC_ZERO, rng=rng)
+        assert y_std.shape == (400,)
+
+    def test_y_std_all_finite(self):
+        rng = np.random.default_rng(3)
+        x   = _make_pm_data(rng, n=400, p0=0.2)
+        y_std, _ = fit_observable_col(x, [('boxcox', {})], 'gennorm',
+                                      point_mass=_PM_SPEC_ZERO, rng=rng)
+        assert np.all(np.isfinite(y_std))
+
+    def test_pm_events_map_to_lower_tail(self):
+        # All PM events should be in the lower tail: z < norm.ppf(p0)
+        rng  = np.random.default_rng(4)
+        p0   = 0.3
+        x    = _make_pm_data(rng, n=600, p0=p0)
+        pm_m = x == 0.0
+        y_std, params = fit_observable_col(x, [('boxcox', {})], 'gennorm',
+                                           point_mass=_PM_SPEC_ZERO, rng=rng)
+        stored_p0 = params[0]
+        assert np.all(y_std[pm_m] < st.norm.ppf(stored_p0) + 1e-6)
+
+    def test_all_pm_raises(self):
+        x = np.zeros(100)
+        with pytest.raises(ValueError, match='All'):
+            fit_observable_col(x, [('boxcox', {})], 'gennorm',
+                               point_mass=_PM_SPEC_ZERO)
+
+    def test_p0_below_min_stored_but_skipped(self):
+        # p0 = 0.005 < min_p0 = 0.01 → stored in params but no mixture in inverse
+        rng = np.random.default_rng(5)
+        n   = 1000
+        x   = np.concatenate([np.zeros(5), rng.lognormal(4, 0.5, n - 5)])
+        _, params = fit_observable_col(x, [('boxcox', {})], 'gennorm',
+                                       point_mass=_PM_SPEC_ZERO, rng=rng)
+        stored_p0 = params[0]
+        assert stored_p0 == pytest.approx(0.005, abs=0.002)
+        # inverse with p0 < min_p0 should treat all u as continuous
+        u_test = np.array([0.003])   # would land in PM range if mixture were active
+        result = inverse_observable_col(u_test, [('boxcox', {})], 'gennorm',
+                                        params, point_mass=_PM_SPEC_ZERO)
+        assert result[0] > 0   # continuous result, not 0.0
+
+    # ── inverse_observable_col with point_mass ─────────────────────────────
+
+    def test_inverse_returns_pm_value_for_u_below_p0(self):
+        rng  = np.random.default_rng(6)
+        x    = _make_pm_data(rng, n=600, p0=0.3)
+        _, params = fit_observable_col(x, [('boxcox', {})], 'gennorm',
+                                       point_mass=_PM_SPEC_ZERO, rng=rng)
+        p0_stored = params[0]
+        u_pm      = np.array([p0_stored * 0.1, p0_stored * 0.5, p0_stored * 0.9])
+        result    = inverse_observable_col(u_pm, [('boxcox', {})], 'gennorm',
+                                           params, point_mass=_PM_SPEC_ZERO)
+        np.testing.assert_array_equal(result, 0.0)
+
+    def test_inverse_continuous_for_u_above_p0(self):
+        rng  = np.random.default_rng(7)
+        x    = _make_pm_data(rng, n=600, p0=0.3)
+        _, params = fit_observable_col(x, [('boxcox', {})], 'gennorm',
+                                       point_mass=_PM_SPEC_ZERO, rng=rng)
+        p0_stored = params[0]
+        u_cont    = np.array([p0_stored + 0.1, p0_stored + 0.4, 0.95])
+        result    = inverse_observable_col(u_cont, [('boxcox', {})], 'gennorm',
+                                           params, point_mass=_PM_SPEC_ZERO)
+        assert np.all(result > 0)   # continuous → positive lognormal values
+
+    def test_roundtrip_continuous_events(self):
+        # Continuous events should survive fit→inverse to < 0.5% error.
+        rng  = np.random.default_rng(8)
+        x    = _make_pm_data(rng, n=800, p0=0.25)
+        pm_m = x == 0.0
+        y_std, params = fit_observable_col(x, [('boxcox', {})], 'gennorm',
+                                           point_mass=_PM_SPEC_ZERO, rng=rng)
+        u_cont = np.clip(st.norm.cdf(y_std[~pm_m]), 1e-10, 1.0 - 1e-10)
+        x_back = inverse_observable_col(u_cont, [('boxcox', {})], 'gennorm',
+                                        params, point_mass=_PM_SPEC_ZERO)
+        np.testing.assert_allclose(x_back, x[~pm_m], rtol=5e-3)
+
+    # ── forward_observable_col with point_mass ─────────────────────────────
+
+    def test_forward_pm_events_deterministic(self):
+        rng  = np.random.default_rng(9)
+        x    = _make_pm_data(rng, n=400, p0=0.3)
+        _, params = fit_observable_col(x, [('boxcox', {})], 'gennorm',
+                                       point_mass=_PM_SPEC_ZERO, rng=rng)
+        # Two calls must return identical results (midpoint rule, no randomness)
+        y1 = forward_observable_col(x, [('boxcox', {})], 'gennorm',
+                                    params, point_mass=_PM_SPEC_ZERO)
+        y2 = forward_observable_col(x, [('boxcox', {})], 'gennorm',
+                                    params, point_mass=_PM_SPEC_ZERO)
+        np.testing.assert_array_equal(y1, y2)
+
+    def test_forward_shape_preserved(self):
+        rng  = np.random.default_rng(10)
+        x    = _make_pm_data(rng, n=300, p0=0.2)
+        _, params = fit_observable_col(x, [('boxcox', {})], 'gennorm',
+                                       point_mass=_PM_SPEC_ZERO, rng=rng)
+        y = forward_observable_col(x, [('boxcox', {})], 'gennorm',
+                                   params, point_mass=_PM_SPEC_ZERO)
+        assert y.shape == (300,)
+
+    # ── event_valid_mask with point_mass ───────────────────────────────────
+
+    def test_mask_allows_pm_zero_through_boxcox(self):
+        # maxMuPt has point_mass at 0; x=0 should now pass the mask.
+        col_name = OBSERVABLES['maxMuPt']['col']
+        x  = np.array([[0.0], [1.0], [5.0], [-1.0]])
+        cm = {col_name: 0}
+        mask, _ = event_valid_mask(x, ['maxMuPt'], cm)
+        assert mask[0]    # x=0  passes (PM event)
+        assert mask[1]    # x=1  passes (valid continuous)
+        assert mask[2]    # x=5  passes
+        assert not mask[3]  # x=-1 rejected (not PM, not in range)
+
+    def test_mask_still_rejects_strictly_invalid(self):
+        # Negative values that are not point-mass values must still be rejected.
+        col_name = OBSERVABLES['maxMuPt']['col']
+        x  = np.array([[-0.5], [-2.0], [0.0], [3.0]])
+        cm = {col_name: 0}
+        mask, _ = event_valid_mask(x, ['maxMuPt'], cm)
+        assert not mask[0]
+        assert not mask[1]
+        assert mask[2]
+        assert mask[3]
+
+    # ── symmetric point mass (dPhiMETclose at ±π) ──────────────────────────
+
+    def test_symmetric_pm_detection(self):
+        rng     = np.random.default_rng(11)
+        n       = 500
+        x_cont  = rng.uniform(0.1, np.pi - 0.1, 400)
+        x_pos   = np.full(50, np.pi)
+        x_neg   = np.full(50, -np.pi)
+        x       = np.concatenate([x_pos, x_neg, x_cont])
+        _, params = fit_observable_col(
+            x, [('abs_value', {}), ('boxcox', {})], 'gennorm',
+            point_mass=_PM_SPEC_PI, rng=rng)
+        # p0 ≈ 100/500 = 0.2
+        assert params[0] == pytest.approx(0.2, abs=0.05)
+
+    def test_symmetric_inverse_returns_signed_pm_values(self):
+        # When symmetric=True, inverse should return both +pi and -pi.
+        rng  = np.random.default_rng(12)
+        n    = 600
+        x    = np.concatenate([
+            np.full(120, np.pi), np.full(120, -np.pi),
+            rng.uniform(0.1, np.pi - 0.1, 360)])
+        _, params = fit_observable_col(
+            x, [('abs_value', {}), ('boxcox', {})], 'gennorm',
+            point_mass=_PM_SPEC_PI, rng=rng)
+        p0_stored = params[0]
+        u_pm = np.full(200, p0_stored * 0.5)
+        result = inverse_observable_col(
+            u_pm, [('abs_value', {}), ('boxcox', {})], 'gennorm',
+            params, point_mass=_PM_SPEC_PI)
+        assert np.all(np.abs(np.abs(result) - np.pi) < 1e-6)
+        # Both signs should appear (random with high probability over 200 samples)
+        assert np.any(result > 0)
+        assert np.any(result < 0)

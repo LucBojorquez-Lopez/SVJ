@@ -231,6 +231,20 @@ DISTRIBUTIONS = {
         'input_range': (0.0, np.inf),
         'desc':        'Log-normal; shape s, loc fixed to 0, scale.  Requires x > 0.',
     },
+    # ── Burr Type XII  (c, d, loc, scale) ────────────────────────────────────
+    # Heavy-tailed distribution with a mode at a positive x when c > 1; good
+    # for pT-like spectra that rise from a hard threshold then fall off.
+    # loc is fixed just below the data minimum rather than at 0: fixing at 0
+    # forces MLE to put mass in [0, pT_cut] where there is no data, pushing
+    # c → ≤1 (monotone decrease).  Anchoring loc near x.min() lets c > 1
+    # freely and the distribution captures the rise-then-fall shape.
+    'burr12': {
+        'dist':        st.burr12,
+        'n_params':    4,
+        'fit_init':    lambda x: ((2.0, 2.0), {'floc': max(0.0, float(x.min()) - 1e-3)}),
+        'input_range': (0.0, np.inf),
+        'desc':        'Burr Type XII; shapes c, d, loc fixed just below data min, scale.',
+    },
 }
 
 
@@ -275,25 +289,31 @@ OBSERVABLES = {
     },
 
     # ── maxElePt: maximum electron pT ─────────────────────────────────────────
-    # Often zero in SVJ events (electrons are rare).  Including this observable
-    # in the regression discards all events with maxElePt = 0.
+    # Often zero in SVJ events (electrons are rare).  With point_mass enabled,
+    # the zero-events are modelled as a discrete atom rather than discarded.
+    # Set point_mass=None to revert to the original behaviour (discard zeros).
     'maxElePt': {
         'col':             'maxElePt',
         'pipeline':        [('boxcox', {})],
         'distribution':    'gennorm',
         'default_include': False,
         'label':           r'Max $e$ $p_T$ (GeV)',
-        'desc':            'Max final-state electron pT.  Often 0; including discards those events.',
+        'desc':            'Max final-state electron pT.  Often 0; mixture model retains those events.',
+        'point_mass':      {'value': 0.0, 'tol': 1e-10, 'symmetric': False, 'min_p0': 0.001},
     },
 
     # ── maxMuPt: maximum muon pT ──────────────────────────────────────────────
+    # Zero when no muon is produced; fraction depends on Brmu.  The mixture
+    # model captures this discrete atom.  Set point_mass=None to revert to
+    # the original behaviour (discard zero-events before Box-Cox).
     'maxMuPt': {
         'col':             'maxMuPt',
         'pipeline':        [('boxcox', {})],
         'distribution':    'gennorm',
         'default_include': True,
         'label':           r'Max $\mu$ $p_T$ (GeV)',
-        'desc':            'Max final-state muon pT (from dark-rho leptonic decays).',
+        'desc':            'Max final-state muon pT.  Often 0; mixture model retains those events.',
+        'point_mass':      {'value': 0.0, 'tol': 1e-10, 'symmetric': False, 'min_p0': 0.001},
     },
 
     # ── jetThrust: jet thrust (stored as T; regressed as 1−T) ─────────────────
@@ -314,8 +334,8 @@ OBSERVABLES = {
     # rare at your parameter point.
     'transSphericity': {
         'col':             'transSphericity',
-        'pipeline':        [('boxcox', {})],
-        'distribution':    'gennorm',
+        'pipeline':        [('identity', {})],
+        'distribution':    'beta',
         'default_include': False,
         'label':           r'Transverse sphericity $S_T$',
         'desc':            'S_T = 2*lambda_min of the 2×2 sphericity tensor.  Can be 0.',
@@ -413,6 +433,10 @@ OBSERVABLES = {
     # ── dPhiMETclose: signed Δφ(closest jet to MET, MET) ─────────────────────
     # Signed angle ∈ (−π, π]; abs_value maps to [0, π), then boxcox.
     # Symmetric around 0, so abs_value inverse (alternating signs) is valid.
+    # Optional mixture at ±π (jet exactly opposite to MET): symmetric=True so
+    # both raw +π and −π are captured as one point mass.  These events survive
+    # the current pipeline (abs(±π)=π > 0) but can pile up near the upper
+    # boundary.  Set point_mass=None to fit the full distribution as continuous.
     'dPhiMETclose': {
         'col':             'dPhiMETclose',
         'pipeline':        [('abs_value', {}),('boxcox', {})],
@@ -420,6 +444,7 @@ OBSERVABLES = {
         'default_include': True,
         'label':           r'$|\Delta\phi|$(MET, close jet)',
         'desc':            'Signed Δφ(MET, closest jet); abs_value applied first.  Can be 0.',
+        'point_mass':      {'value': np.pi, 'tol': 1e-1, 'symmetric': True, 'min_p0': 0.001},
     },
 
     # ── dPhiMETfar: signed Δφ(farthest jet to MET, MET) ──────────────────────
@@ -490,11 +515,12 @@ OBSERVABLES = {
     # ── RT: MET / HT ──────────────────────────────────────────────────────────
     'RT': {
         'col':             'RT',
-        'pipeline':        [('identity', {})],
+        'pipeline':        [('boxcox', {})],
         'distribution':    'gennorm',
         'default_include': False,
         'label':           r'$R_T$',
         'desc':            'MET / H_T; key SVJ discriminant (Cohen et al. 2015).',
+        'point_mass':      {'value': 1.0, 'tol': 1e-10, 'symmetric': False, 'min_p0': 0.01},
     },
 
     # ── Meff: effective mass ───────────────────────────────────────────────────
@@ -530,6 +556,8 @@ OBSERVABLES = {
     # ── fInv: invisible pT fraction of leading jet ────────────────────────────
     # Invisible = neutrinos + dark pions/rhos, matched geometrically (ΔR < jetR)
     # to the visible-only jet axis.  fInv = inv_pT / (vis_pT + inv_pT).
+    # fInv=0 (fully visible jet) is physically meaningful; the mixture model
+    # captures this discrete atom.  Set point_mass=None for a pure continuous fit.
     'fInv': {
         'col':             'fInv',
         'pipeline':        [('identity', {})],
@@ -537,6 +565,7 @@ OBSERVABLES = {
         'default_include': False,
         'label':           r'$f_\mathrm{inv}$',
         'desc':            'Invisible pT fraction of leading jet: (ν + dark pT) / total leading jet pT.',
+        'point_mass':      {'value': 0.0, 'tol': 2e-2, 'symmetric': False, 'min_p0': 0.01},
     },
 
     # ── Derived: hemiMass2 / hemiMass1 ────────────────────────────────────────
@@ -628,16 +657,46 @@ def load_tsv(path):
 # Pipeline utility functions
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _check_point_mass(x, pm_spec):
+    """
+    Boolean mask: True where x matches the point-mass spec.
+
+    Parameters
+    ----------
+    x : np.ndarray, shape (N,)
+        Raw (pre-pipeline) observable values.
+    pm_spec : dict or None
+        The 'point_mass' entry from an OBSERVABLES spec.
+        Keys: value (float), tol (float, default 1e-10),
+              symmetric (bool, default False).
+        None → all-False mask.
+    """
+    if pm_spec is None:
+        return np.zeros(len(x), dtype=bool)
+    val = float(pm_spec['value'])
+    tol = float(pm_spec.get('tol', 1e-10))
+    m   = np.abs(x - val) < tol
+    if pm_spec.get('symmetric', False):
+        m |= np.abs(x + val) < tol
+    return m
+
+
 def n_fitted_params(obs_name):
     """
-    Total number of data-fitted parameters for one observable
-    (sum over transform n_fitted + distribution n_params).
+    Total number of data-fitted parameters for one observable.
+
+    Layout when 'point_mass' is not None:
+      (p0, *transform_fitted_params_in_order, *dist_params)
+    Layout otherwise:
+      (*transform_fitted_params_in_order, *dist_params)
     """
     obs  = OBSERVABLES[obs_name]
     pipe = obs['pipeline'] or []
     dist = obs['distribution']
     n  = sum(TRANSFORMS[t]['n_fitted'] for t, _ in pipe)
     n += DISTRIBUTIONS[dist]['n_params'] if dist else 0
+    if obs.get('point_mass') is not None:
+        n += 1   # p0: point-mass fraction, stored as first parameter
     return n
 
 
@@ -700,14 +759,22 @@ def event_valid_mask(X_raw, obs_selection, col_map=None):
         col_data  = X_raw[:, tsv_col].copy()
         col_mask  = np.ones(len(col_data), dtype=bool)
 
+        col_data_raw = col_data.copy()      # frozen raw values for point-mass check
+        pm_spec      = obs.get('point_mass')
+
         for t_name, t_fixed in pipeline:
             t = TRANSFORMS[t_name]
             if t['requires'] is not None:
                 lo, hi = t['requires'](**t_fixed)
+                range_ok = np.ones(len(col_data), dtype=bool)
                 if lo > -np.inf:
-                    col_mask &= col_data > lo
+                    range_ok &= col_data > lo
                 if hi < np.inf:
-                    col_mask &= col_data < hi
+                    range_ok &= col_data < hi
+                # Point-mass events are always checked against raw values and
+                # bypass range restrictions (they are handled by the mixture model).
+                pm_pass  = _check_point_mass(col_data_raw, pm_spec)
+                col_mask &= (range_ok | pm_pass)
 
             # Advance col_data through non-fitted (fixed) transforms for the
             # next range check.  Fitted transforms (boxcox) are always last in
@@ -723,37 +790,68 @@ def event_valid_mask(X_raw, obs_selection, col_map=None):
     return mask, n_disc
 
 
-def fit_observable_col(x_col, pipeline, dist_name):
+def fit_observable_col(x_col, pipeline, dist_name, point_mass=None, rng=None):
     """
     Apply the full transform pipeline to a 1-D data array and fit the chosen
     distribution.  Returns standard-normal mapped values and all fitted params.
 
-    Pipeline
-    --------
-    1. Apply each invertible transform in order, collecting fitted params.
-    2. Fit the chosen distribution (MLE).
-    3. Map: dist CDF → uniform → norm.ppf → standard normal.
+    When point_mass is not None, a mixture model is used:
+      - Events within tolerance of the boundary value are separated out.
+      - p0 (their fraction) is prepended to fitted_params as the first element.
+      - The continuous subset is transformed and fitted as usual.
+      - Continuous events are mapped via the rescaled CDF: u = p0 + (1-p0)*F(y).
+      - Point-mass events are mapped via a randomized PIT: u ~ Uniform(0, p0).
+      - If p0 < point_mass['min_p0'], the mixture is skipped (p0 still stored).
 
     Parameters
     ----------
     x_col : np.ndarray, shape (N,)
-        Pre-filtered observable values (all entries must satisfy range checks).
+        Pre-filtered observable values.
     pipeline : list of (str, dict)
         Ordered list of (transform_name, fixed_params).
     dist_name : str
         Key in DISTRIBUTIONS.
+    point_mass : dict or None
+        Spec from OBSERVABLES 'point_mass' key.  When not None, p0 is prepended
+        to fitted_params.  Keys: value, tol, symmetric, min_p0.
+    rng : numpy Generator or None
+        RNG for the randomized PIT of point-mass events.  None → global state.
 
     Returns
     -------
     y_std : np.ndarray, shape (N,)
-        Standard-normal mapped values (probit-transformed CDF outputs).
+        Standard-normal mapped values.
     fitted_params : tuple of float
-        All data-fitted parameters: transform params (in pipeline order) then
-        distribution params.
+        Layout when point_mass is not None:
+          (p0, *transform_params_in_pipeline_order, *dist_params)
+        Layout when point_mass is None:
+          (*transform_params_in_pipeline_order, *dist_params)
     """
-    y = x_col.copy()
     fitted = []
 
+    # ── Point-mass separation ────────────────────────────────────────────────
+    p0 = 0.0
+    if point_mass is not None:
+        pm_mask = _check_point_mass(x_col, point_mass)
+        p0_raw  = float(pm_mask.sum()) / len(x_col) if len(x_col) > 0 else 0.0
+        if p0_raw >= 1.0:
+            raise ValueError(
+                f"All {len(x_col)} events match the point mass "
+                f"(value={point_mass['value']}, p0={p0_raw:.3f}).  "
+                "Cannot fit a continuous distribution on an empty subset.")
+        p0 = p0_raw   # store actual fraction; forward/inverse threshold at min_p0
+        fitted.append(p0)
+
+    pm_active = (point_mass is not None) and (p0 >= point_mass.get('min_p0', 0.01))
+
+    # ── Continuous subset ─────────────────────────────────────────────────────
+    # Always separate PM events from the pipeline to avoid e.g. boxcox(0) failing.
+    if point_mass is not None:
+        y = x_col[~pm_mask].copy()
+    else:
+        y = x_col.copy()
+
+    # ── Transforms + distribution fit ────────────────────────────────────────
     for t_name, t_fixed in (pipeline or []):
         t = TRANSFORMS[t_name]
         y, t_params = t['fit'](y, **t_fixed)
@@ -764,31 +862,69 @@ def fit_observable_col(x_col, pipeline, dist_name):
     dist_fitted  = dist_spec['dist'].fit(y, *args, **kwargs)
     fitted.extend(dist_fitted)
 
-    u     = np.clip(dist_spec['dist'].cdf(y, *dist_fitted), 1e-10, 1.0 - 1e-10)
-    y_std = st.norm.ppf(u)
+    # ── CDF → standard normal ─────────────────────────────────────────────────
+    u_cont = np.clip(dist_spec['dist'].cdf(y, *dist_fitted), 1e-10, 1.0 - 1e-10)
+
+    if pm_active:
+        # Rescale continuous CDF into [p0, 1]
+        u_rescaled = np.clip(p0 + (1.0 - p0) * u_cont, 1e-10, 1.0 - 1e-10)
+        y_std  = np.empty(len(x_col))
+        n_pm   = int(pm_mask.sum())
+        _draw  = rng.uniform if rng is not None else np.random.uniform
+        u_pm   = np.clip(_draw(0.0, p0, n_pm), 1e-10, p0 - 1e-10)
+        y_std[pm_mask]  = st.norm.ppf(u_pm)
+        y_std[~pm_mask] = st.norm.ppf(u_rescaled)
+    elif point_mass is not None and pm_mask.any():
+        # PM spec present but fraction below min_p0: place PM events at their
+        # expected CDF rank (midpoint of the tiny [0, p0] interval).
+        y_std = np.empty(len(x_col))
+        y_std[~pm_mask] = st.norm.ppf(u_cont)
+        y_std[pm_mask]  = st.norm.ppf(max(p0 / 2.0, 1e-10))
+    else:
+        y_std = st.norm.ppf(u_cont)
 
     return y_std, tuple(float(p) for p in fitted)
 
 
-def forward_observable_col(x_col, pipeline, dist_name, fitted_params):
+def forward_observable_col(x_col, pipeline, dist_name, fitted_params,
+                           point_mass=None):
     """
     Apply forward pipeline with known params to map original-space values to
     standard-normal space.
+
+    When point_mass is not None, p0 is read from fitted_params[0] and the
+    mixture CDF is applied.  Point-mass events receive the deterministic
+    midpoint value norm.ppf(p0/2) (unlike fit, which uses a randomized PIT).
 
     Parameters
     ----------
     x_col : np.ndarray
     pipeline, dist_name : as in fit_observable_col
     fitted_params : tuple/array of float
-        Parameters in the same order as returned by fit_observable_col.
+    point_mass : dict or None
+        Spec from OBSERVABLES 'point_mass' key.
 
     Returns
     -------
     y_std : np.ndarray
     """
     params = list(fitted_params)
-    y = x_col.copy()
-    pos = 0
+    pos    = 0
+
+    p0 = 0.0
+    if point_mass is not None:
+        p0  = float(params[0])
+        pos = 1
+
+    pm_active = (point_mass is not None) and (p0 >= point_mass.get('min_p0', 0.01))
+
+    # Separate PM events from pipeline input (prevents e.g. boxcox(0) failing)
+    if point_mass is not None:
+        pm_mask = _check_point_mass(x_col, point_mass)
+        y = x_col[~pm_mask].copy()
+    else:
+        pm_mask = None
+        y = x_col.copy()
 
     for t_name, t_fixed in (pipeline or []):
         t = TRANSFORMS[t_name]
@@ -799,19 +935,40 @@ def forward_observable_col(x_col, pipeline, dist_name, fitted_params):
 
     dist_spec   = DISTRIBUTIONS[dist_name]
     dist_params = tuple(params[pos:pos + dist_spec['n_params']])
-    u    = np.clip(dist_spec['dist'].cdf(y, *dist_params), 1e-10, 1.0 - 1e-10)
-    return st.norm.ppf(u)
+    u = np.clip(dist_spec['dist'].cdf(y, *dist_params), 1e-10, 1.0 - 1e-10)
+
+    if pm_active:
+        u_rescaled = np.clip(p0 + (1.0 - p0) * u, 1e-10, 1.0 - 1e-10)
+        y_std = np.empty(len(x_col))
+        y_std[pm_mask]  = st.norm.ppf(p0 / 2.0)   # deterministic midpoint
+        y_std[~pm_mask] = st.norm.ppf(u_rescaled)
+        return y_std
+    elif point_mass is not None and pm_mask.any():
+        y_std = np.empty(len(x_col))
+        y_std[~pm_mask] = st.norm.ppf(u)
+        y_std[pm_mask]  = st.norm.ppf(max(p0 / 2.0, 1e-10))
+        return y_std
+    else:
+        return st.norm.ppf(u)
 
 
-def inverse_observable_col(u, pipeline, dist_name, fitted_params):
+def inverse_observable_col(u, pipeline, dist_name, fitted_params,
+                           point_mass=None):
     """
     Apply inverse pipeline: uniform quantiles → original observable space.
+
+    When point_mass is not None and p0 >= min_p0, samples with u <= p0 are
+    mapped to the boundary value directly; samples with u > p0 have their
+    uniform quantile rescaled to (0,1) before passing through the standard
+    inverse pipeline.
 
     Parameters
     ----------
     u : np.ndarray, shape (N,)
         Uniform values in (0, 1).  These are the copula marginal CDF outputs.
     pipeline, dist_name, fitted_params : as in forward_observable_col.
+    point_mass : dict or None
+        Spec from OBSERVABLES 'point_mass' key.
 
     Returns
     -------
@@ -820,6 +977,13 @@ def inverse_observable_col(u, pipeline, dist_name, fitted_params):
     """
     params = list(fitted_params)
     pos    = 0
+
+    p0 = 0.0
+    if point_mass is not None:
+        p0  = float(params[0])
+        pos = 1
+
+    pm_active = (point_mass is not None) and (p0 >= point_mass.get('min_p0', 0.01))
 
     # Collect transform params in forward order
     t_params_list = []
@@ -832,15 +996,36 @@ def inverse_observable_col(u, pipeline, dist_name, fitted_params):
     dist_spec   = DISTRIBUTIONS[dist_name]
     dist_params = tuple(params[pos:pos + dist_spec['n_params']])
 
-    # Distribution quantile: uniform → transform space
-    y = dist_spec['dist'].ppf(u, *dist_params)
+    def _invert_continuous(u_c):
+        y = dist_spec['dist'].ppf(u_c, *dist_params)
+        for t_name, t_fixed, t_params in reversed(t_params_list):
+            t = TRANSFORMS[t_name]
+            y = t['inverse'](y, t_params, **t_fixed)
+        return y
 
-    # Inverse transforms in reverse order
-    for t_name, t_fixed, t_params in reversed(t_params_list):
-        t = TRANSFORMS[t_name]
-        y = t['inverse'](y, t_params, **t_fixed)
+    if not pm_active:
+        return _invert_continuous(u)
 
-    return y
+    # ── Mixture inverse ───────────────────────────────────────────────────────
+    pm_u_mask = (u <= p0)
+    x         = np.empty(len(u))
+
+    # Point-mass events: return the boundary value (±value if symmetric)
+    pm_val    = float(point_mass['value'])
+    n_pm      = int(pm_u_mask.sum())
+    if point_mass.get('symmetric', False) and n_pm > 0:
+        signs        = np.where(np.random.random(n_pm) < 0.5, 1.0, -1.0)
+        x[pm_u_mask] = signs * pm_val
+    else:
+        x[pm_u_mask] = pm_val
+
+    # Continuous events: rescale u from [p0, 1] → (0, 1) then invert
+    if (~pm_u_mask).any():
+        u_rescaled      = np.clip((u[~pm_u_mask] - p0) / (1.0 - p0),
+                                  1e-10, 1.0 - 1e-10)
+        x[~pm_u_mask]  = _invert_continuous(u_rescaled)
+
+    return x
 
 
 def validate_scan_selection(obs_selection):

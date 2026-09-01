@@ -45,7 +45,7 @@ pytest tests/test_observables.py -v -k "test_forward_inverse_roundtrip"
 | File | What it tests |
 |------|---------------|
 | `test_transforms.py` | `TRANSFORMS` registry: forward, inverse, `n_fitted`, `requires` |
-| `test_observables.py` | `OBSERVABLES`/`DISTRIBUTIONS` registry integrity; `fit_observable_col`, `event_valid_mask`, forward/inverse roundtrip, `load_tsv` |
+| `test_observables.py` | `OBSERVABLES`/`DISTRIBUTIONS` registry integrity; `fit_observable_col`, `event_valid_mask`, forward/inverse roundtrip, `load_tsv`; `TestPointMassMixture` — mixture-distribution fit, roundtrip, `min_p0` threshold, symmetric PM |
 | `test_helpers.py` | `BoxCox`, `get_common_finite`, `preprocess_data`, `exp_terms`, `kld_params`, `sample_svj_new` |
 | `test_scan_svj.py` | Config parsing (`read_scan_cfg`, `resolve_point`), Gaussian copula fitter (`fit_mvn_corr`) |
 | `test_val_utils.py` | `resolve_point`, `sample_interior_points`, `js_per_obs`, `mmd_rbf`, `extract_obs_cols` |

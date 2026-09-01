@@ -66,12 +66,25 @@ No nearest-grid comparison; no MMD. This is the right script to run after a roug
 
 **Requirements.** Completed scan NPZ with co-located `svj_scan_meta.json`; compiled binary.
 
+**Binary selection.** The binary that generated `scan_npz` is auto-detected
+from `svj_scan_meta.json`'s `binary` key (written by `scan_svj.py` — see
+`docs/running-a-scan.md`'s "Truth vs. Delphes" section). Pass `--binary` to
+override, e.g. to validate a truth scan against Delphes reconstruction or
+vice versa.
+
 ```bash
 python src/run_regression/validate_grid.py \
     simulated/svj/svj_scan.npz \
     --N1 50000 --N2 5000 --N3 20 \
     --n-workers 4 \
     --out simulated/svj/validation_grid.npz
+
+# Delphes scan (binary auto-detected as svj_regression_delphes):
+python src/run_regression/validate_grid.py \
+    simulated/svj/svj_regression_delphes_scan.npz \
+    --N1 50000 --N2 5000 --N3 20 \
+    --n-workers 4 \
+    --out simulated/svj/validation_grid_delphes.npz
 ```
 
 **Output NPZ.**
@@ -105,7 +118,7 @@ Three comparisons for both JS and MMD:
 
 If `mmd_interp < mmd_nearest`, the interpolation is beating the naive alternative. If both are close to `mmd_baseline`, the model is near the statistical limit.
 
-**Requirements.** Finalised scan NPZ; compiled binary. Each validation point requires 3 PYTHIA runs, so total PYTHIA calls = 3 × N3.
+**Requirements.** Finalised scan NPZ; compiled binary. Each validation point requires 3 PYTHIA runs, so total PYTHIA calls = 3 × N3. Binary selection works the same way as `validate_grid.py` (auto-detected from `svj_scan_meta.json`, overridable with `--binary`).
 
 ```bash
 python src/run_regression/validate_production.py \
