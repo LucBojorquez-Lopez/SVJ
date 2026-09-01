@@ -55,9 +55,21 @@ export SVJ_WORK=/afs/cern.ch/work/${USER:0:1}/${USER}/svj
 mkdir -p "$SVJ_WORK"
 ```
 
-`$EOS_MGM_URL`-backed EOS paths (`/eos/user/${USER:0:1}/${USER}/`) work too and
-have far more room, but note that EOS is **not** a good place for the build
-itself — compilation does many small writes. Build in `work`, store data on EOS.
+### Do not put the repository or the build on EOS
+
+EOS has far more room (`/eos/user/${USER:0:1}/${USER}/`), which makes it
+tempting as a home for everything. Resist that:
+
+- **Clone into AFS `work`, not EOS.** EOS is a FUSE-mounted network filesystem
+  tuned for streaming large files. Git does the opposite — thousands of small
+  stat/open/rename calls on `.git` — so `clone`, `status` and `checkout` become
+  very slow, and file-locking semantics under FUSE are weaker than git assumes.
+- **Compile in `work` too.** A build is many small writes, the same bad fit.
+- **Put bulk *data* on EOS**: raw TSVs, `--save-raw` output, and new scans.
+  That is what it is for, and §8 shows how to point the configs at it.
+
+Rule of thumb: **code and build in `work`, data on EOS.** The repository is only
+~73 MB, so it fits inside an AFS work quota comfortably.
 
 ### Compiler and Python via LCG
 

@@ -27,10 +27,12 @@ git clone https://github.com/LucBojorquez-Lopez/SVJ.git
 cd SVJ
 ```
 
-A full clone is **~97 MB**: a 35 MB working tree plus ~62 MB of history.
-(Raw TSVs were purged from history in Sept 2026 and are now gitignored, so the
-repository will not grow that way again.) Use `git clone --depth 1` if you only
-want a working copy and no history.
+A full clone is **~73 MB**: a 35 MB working tree plus ~38 MB of history. Raw
+TSVs and dead intermediate NPZs were purged from history in Sept 2026 and the
+paths are gitignored, so the repository will not grow that way again.
+
+`--depth 1` saves little (~67 MB) — most of the weight is the committed scan
+NPZs in the working tree, not history.
 
 **The scan NPZs are committed**, so the API, GUI and validation plots work
 immediately after cloning — no simulation and no C++ build required:
