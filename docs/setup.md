@@ -174,9 +174,10 @@ MB and are reproducible from the binary plus a cfg.
 
 ## Running on CERN lxplus
 
-lxplus needs a different filesystem layout (AFS quota), a compiler and Python
-from an LCG view, and HTCondor rather than SLURM. That is covered in its own
-guide, including exactly what ships in the clone versus what must be rebuilt:
+lxplus needs decisions about where things live (AFS quota, or EOS — both
+supported), a compiler and Python from an LCG view, and HTCondor rather than
+SLURM. That is covered in its own guide, including exactly what ships in the
+clone versus what must be rebuilt:
 
 **→ [lxplus.md](lxplus.md)**
 

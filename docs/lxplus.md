@@ -47,29 +47,98 @@ anywhere else.
 ### Choose your filesystem first
 
 AFS home is quota-limited (~10 GB) and PYTHIA + FastJet together run to several
-GB. Put the dependencies in your work area or on EOS, and keep only the repo
-and venv in AFS:
+GB, so they need somewhere else. Set up a work area for them:
 
 ```bash
 export SVJ_WORK=/afs/cern.ch/work/${USER:0:1}/${USER}/svj
 mkdir -p "$SVJ_WORK"
 ```
 
-### Do not put the repository or the build on EOS
+Where the **repository** itself lives is a separate choice. AFS work is the
+path of least resistance; EOS also works and is the right answer if your other
+repositories are already there — see the next section for how to make it fast.
+The venv can sit next to either.
 
-EOS has far more room (`/eos/user/${USER:0:1}/${USER}/`), which makes it
-tempting as a home for everything. Resist that:
+### Putting the repository on EOS
 
-- **Clone into AFS `work`, not EOS.** EOS is a FUSE-mounted network filesystem
-  tuned for streaming large files. Git does the opposite — thousands of small
-  stat/open/rename calls on `.git` — so `clone`, `status` and `checkout` become
-  very slow, and file-locking semantics under FUSE are weaker than git assumes.
-- **Compile in `work` too.** A build is many small writes, the same bad fit.
-- **Put bulk *data* on EOS**: raw TSVs, `--save-raw` output, and new scans.
-  That is what it is for, and §8 shows how to point the configs at it.
+EOS (`/eos/user/${USER:0:1}/${USER}/`) has far more room than AFS home, and if
+your other repositories already live there it is reasonable to keep this one
+there too. It works — with one caveat worth planning around.
 
-Rule of thumb: **code and build in `work`, data on EOS.** The repository is only
-~73 MB, so it fits inside an AFS work quota comfortably.
+EOS is a FUSE-mounted network filesystem tuned for streaming large files. Git
+is the opposite workload: thousands of small `stat`/`open`/`rename` calls
+against `.git`. So `clone`, `status` and `checkout` are noticeably slower than
+on AFS. The repository is only ~73 MB, so this is a matter of seconds-to-minutes
+of patience, not a blocker. Three things make it markedly better:
+
+**1. Tune git for a slow filesystem.** Run once, inside the clone:
+
+```bash
+git config feature.manyFiles true    # index v4 + untracked cache + faster fetch
+git config core.untrackedCache true  # skip re-stat'ing unchanged directories
+git config core.preloadIndex true    # parallel index refresh
+git config core.splitIndex true      # cheaper index writes
+git config core.commitGraph true     # faster history walks
+git config core.fsyncMethod batch    # batch fsyncs instead of per-file
+git config gc.auto 0                 # no surprise repack mid-session
+git commit-graph write --reachable
+```
+
+`git status` is the command that benefits most, since the untracked cache is
+what removes the repeated directory stats.
+
+**2. Clone locally, then copy.** A direct clone onto EOS pays the small-file
+penalty for every object. Cloning to fast local disk first and moving the
+result as one bulk transfer — which EOS *is* good at — is usually faster:
+
+```bash
+git clone https://github.com/LucBojorquez-Lopez/SVJ.git /tmp/SVJ
+cp -a /tmp/SVJ /eos/user/${USER:0:1}/${USER}/SVJ
+rm -rf /tmp/SVJ
+```
+
+**3. Or keep `.git` off EOS entirely.** `--separate-git-dir` leaves the working
+files on EOS while the git metadata — the part that hurts — sits on AFS work.
+The worktree gets a small `.git` *file* pointing at the real directory, and
+every git command works normally through it:
+
+```bash
+git clone --separate-git-dir="$SVJ_WORK/SVJ.git" \
+    https://github.com/LucBojorquez-Lopez/SVJ.git \
+    /eos/user/${USER:0:1}/${USER}/SVJ
+```
+
+The trade-off: two locations to keep track of, and the worktree is not
+self-contained if you move it. Verified working — `status`, `log`, the test
+suite and sampling all behave identically through the pointer.
+
+### What should *not* go on EOS
+
+- **The PYTHIA and FastJet builds.** These are many thousands of small
+  compile-and-link writes and are genuinely painful on EOS. They are not part
+  of the repository, so put them in `$SVJ_WORK` (§3) regardless of where the
+  clone lives.
+- Building `svj_regression` itself is fine on EOS — it is one `g++` invocation
+  producing one output file.
+
+### Batch jobs must be able to read EOS
+
+This is the one that will actually bite you. With
+`should_transfer_files = NO`, an HTCondor job reads the executable and the
+repository straight from the shared filesystem, so the worker node needs
+valid credentials for it. For an EOS-resident repository add to your `.sub`:
+
+```
+MY.SendCredential = True
+```
+
+Credential handling on lxplus changes between releases, so treat this as the
+first thing to confirm in the §7.1 smoke test — check the job's `.err` for
+permission or "no such file" errors on repository paths. If credential
+forwarding turns out to be awkward, the fallbacks are to keep the clone (or at
+least a checkout) in `$SVJ_WORK` for batch use, or to switch the `.sub` to
+`should_transfer_files = YES` and set `SVJ_REPO` explicitly, which
+`condor/svj_job.sh` supports.
 
 ### Compiler and Python via LCG
 
@@ -129,8 +198,11 @@ parallel builds get throttled or killed. Expect 15–30 minutes for PYTHIA.
 
 ## 4. Clone and build the generator
 
+Clone wherever you decided in §2 — `$SVJ_WORK` below, or an EOS path using one
+of the three approaches in "Putting the repository on EOS":
+
 ```bash
-cd "$SVJ_WORK"
+cd "$SVJ_WORK"                    # or your EOS directory
 git clone https://github.com/LucBojorquez-Lopez/SVJ.git
 cd SVJ
 
@@ -140,6 +212,9 @@ export FASTJET_DIR="$SVJ_WORK/fastjet3"
 make check-deps        # confirms both are findable; builds nothing
 make svj_regression
 ```
+
+`PYTHIA_DIR`/`FASTJET_DIR` point into `$SVJ_WORK` regardless of where the clone
+lives — those builds should stay off EOS.
 
 Add those two `export` lines to your `setup_env.sh` so plain
 `make svj_regression` keeps working, and because batch jobs that rebuild need
@@ -303,6 +378,9 @@ in `condor/svj_job.sh` does this.
   §7.1 as mandatory.
 - The `validation` workflow's `--N3 125` and the `tsv` workflow's overrides are
   hardcoded in `condor/svj_job.sh`; edit them there, not in the `.sub`.
+- `MY.SendCredential = True` is set in the `.sub` files for EOS-resident
+  repositories, but credential forwarding on lxplus has not been tested here
+  and changes between releases. Confirm it in the §7.1 smoke test.
 - `merge_svj_validation.py` hardcodes `N_JOBS = 16` and the shard path pattern.
 - There is no DAGMan file, so the merge step after each array is manual.
 - `sample_svj_new` returns NaN for a small fraction of draws; see the

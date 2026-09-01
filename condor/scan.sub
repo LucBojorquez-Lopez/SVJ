@@ -23,4 +23,9 @@ request_disk            = 4 GB
 should_transfer_files   = NO
 getenv                  = True
 
+# Required if the repository lives on EOS: the worker node needs forwarded
+# credentials to read it.  Harmless otherwise.  Credential handling on lxplus
+# changes between releases — confirm in the smoke test (docs/lxplus.md §7.1).
+MY.SendCredential       = True
+
 queue 16
