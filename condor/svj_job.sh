@@ -32,8 +32,8 @@ TASK="${3:?missing task id}"
 # fallback only works when the executable really runs from its own path, which
 # on lxplus it does NOT: CERN's schedds transfer the executable to the job's
 # scratch directory even with `should_transfer_files = NO`, so $BASH_SOURCE
-# resolves to /pool/condor/dir_<n>/condor_exec.exe.  Observed, not theoretical —
-# it is what the first smoke test caught.
+# resolves to /pool/condor/dir_<n>/condor_exec.exe and every path derived from
+# it is wrong.
 REPO_ROOT="${SVJ_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
 if [[ ! -f "$REPO_ROOT/src/run_regression/scan_svj.py" ]]; then

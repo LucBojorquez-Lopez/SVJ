@@ -125,6 +125,52 @@ python src/run_regression/scan_svj.py scan_regression.cfg \
 The observable names must match keys in the `OBSERVABLES` dict in `src/observables.py`,
 and each must have a non-`None` `pipeline` and `distribution`.
 
+## How dense does the grid need to be?
+
+Dense enough that interpolating between grid points means something. The
+pipeline interpolates **fitted distribution parameters**, not samples, and the
+transform parameters combine multiplicatively when the transforms are inverted
+— so a linear blend of parameters is not the blend of the corresponding
+distributions. Too coarse a grid does not degrade gracefully; it produces
+confident nonsense between the points it was fitted at.
+
+A 2x2x2x2x2x2 grid makes this concrete. Every grid point fits fine, but walking
+`mZ` between two of them, with all other axes pinned at a grid point:
+
+| mZ | `leadVisPt` median (GeV) |
+|---|---|
+| 1000 | 348  <- grid point |
+| 1200 | 3867 |
+| 1500 | 4711 |
+| 2200 | 2457 |
+| 3000 | 1019  <- grid point |
+
+Both endpoints are physical; everything between is inflated by up to ~14x, in a
+smooth arch that looks like a result rather than a failure. Nothing errors and
+nothing is NaN.
+
+So: two levels per axis is a **pipeline test, not a physics grid**. The shipped
+`working_example` uses 8x8x4x4 for this reason. When adding an axis, check a
+mid-grid point against a direct single-point simulation before trusting it —
+`validate_grid.py` does exactly this comparison, see [validation.md](validation.md).
+
+## Reproducibility across runs
+
+Two runs of the same config agree physically but are **not bit-identical**, and
+the same is true of a scan split across Condor jobs versus run in one process.
+Sampled observable medians match to every digit you are likely to print;
+fitted parameters differ by ~1e-14 relative in the median, with a tail to ~1e-5.
+
+The cause is that grid axis values can differ in the last bit — `mZ` coming out
+as `3000.000000000001` versus `3000.0000000000014` — which is written into each
+per-point config as text, and the fit optimizers (Box-Cox `lambda` especially)
+amplify it. It is floating-point noise, not non-determinism in the physics:
+per-point PYTHIA seeds are fixed (`write_point_cfg` never sets `seed_offset`,
+so every point runs with seed 1).
+
+Worth knowing if you ever diff two NPZs and expect zeros. `fit_raw.py` re-fit
+from the same raw events *is* exactly reproducible — zero difference.
+
 ## Condor array jobs
 
 Submit files live in [`condor/`](../condor/); the full lxplus walkthrough,

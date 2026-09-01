@@ -4,20 +4,65 @@ A complete path from `git clone` to submitted batch jobs on lxplus, and an
 explicit account of **what ships with the repository versus what you have to
 rebuild**.
 
-> **What is verified, and what is not.** The environment, the build and the
-> analysis pipeline were exercised on this account on lxplus (RHEL 9.8, LCG_110,
-> gcc 13.1, Python 3.13): `make svj_regression` against the LCG view and the
-> full §5 verification ladder.
+> **Status.** Verified on lxplus (RHEL 9.8, EL9 gcc 11.5, LCG_110, Python 3.13):
+> the environment, `tools/build_deps.sh`, `make svj_regression`, the §5 ladder,
+> `condor/smoke.sub`, a 64-point scan run both locally and as a 4-job Condor
+> array, the `--merge` step, and `fit_raw.py`.
 >
-> The Condor path in §7 was arrived at by submitting real jobs, not by reading
-> documentation — the AFS/EOS split in §7.2 exists because the alternatives were
-> tried and observed to fail. `condor/smoke.sub` runs end to end: worker node
-> reads the EOS clone, sources `setup_env.sh`, runs the scan, writes its NPZ
-> back to EOS, and its `.out`/`.err` are readable.
->
-> Still unexercised: the array `.sub` files at full size — their job flavours
-> and larger resource requests. They share every other setting with
-> `smoke.sub`. Run §7.3 first regardless; it costs a minute.
+> Not verified: an array at full production size. `queue 16` with
+> `request_cpus = 16` and the longer job flavours are untried; everything those
+> files do apart from the scale is shared with `smoke.sub` via `_common.inc`.
+> Run §7.3 before any array — it costs a minute.
+
+---
+
+## 0. Setting up a clone on EOS, start to finish
+
+The whole procedure, for when you are doing this again on a fresh or re-merged
+checkout. Each step links to the section that explains it.
+
+```bash
+# 1. Clone onto EOS.
+cd /eos/user/${USER:0:1}/${USER}
+git clone https://github.com/LucBojorquez-Lopez/SVJ.git && cd SVJ   # §3
+
+# 2. Environment.  Creates $SVJ_AFS (~/.svj) and installs the Condor launcher.
+source setup_env.sh                                                 # §2
+
+# 3. Dependencies.  ~20 min.  Skip to run against the LCG view instead.
+bash tools/build_deps.sh                                            # §2
+source setup_env.sh          # re-source; $SVJ_DEPS should now say `local`
+
+# 4. Generator.
+make svj_regression                                                 # §4
+
+# 5. Verify locally, cheapest first.
+pytest tests/ -q                                                    # §5
+
+# 6. Grid proxy, for EOS access from worker nodes.  Note -out.
+voms-proxy-init -voms atlas -out "$X509_USER_PROXY" -valid 168:00    # §7.2
+
+# 7. One Condor job before any array.  Mandatory.
+condor_submit condor/smoke.sub && condor_q                           # §7.3
+cat "$SVJ_AFS"/logs/smoke_*.err
+```
+
+### What has to be re-done, and what does not
+
+`setup_env.sh` and `tools/build_deps.sh` are idempotent — re-running them on an
+existing setup is safe and cheap.
+
+| | Survives a re-clone? |
+|---|---|
+| `$SVJ_WORK` (PYTHIA, FastJet — a sibling of the repo, not inside it) | yes, reused |
+| `$SVJ_AFS` (`~/.svj`: launcher, logs) | yes, launcher re-synced from the repo |
+| x509 proxy | yes, until it expires |
+| `svj_regression` binary | **no** — gitignored, rebuild with `make` |
+| Downloaded PYTHIA/FastJet tarballs | cached in `$SVJ_WORK`, not re-fetched |
+
+Rebuild the generator (`make clean && make svj_regression`) whenever you switch
+between local and view dependencies: the library paths are baked into the
+binary's rpath at link time.
 
 ---
 
@@ -109,6 +154,27 @@ Two choices inside it are deliberate:
 
 `-j4`, not `-j$(nproc)`: lxplus login nodes are shared and routinely sit above
 a load average of their core count.
+
+### Adding another dependency
+
+If the generator grows a dependency beyond PYTHIA and FastJet — a detector
+simulation, say — it has to be added in two places, and both matter:
+
+1. **`tools/build_deps.sh`** — fetch, configure with its **final** `$SVJ_WORK`
+   prefix, build on local disk, copy in. Extend the relocatability check at the
+   end to cover its libraries.
+2. **The `$SVJ_DEPS=local` branch of `setup_env.sh`** — export whatever the
+   build needs, and add it to the guard that decides local-versus-view. The
+   fallback branch has no equivalent unless the LCG view happens to ship it, so
+   decide explicitly what should happen when the local build is missing.
+
+The `Makefile` needs a corresponding `-I` / `-L` / `-Wl,-rpath` triple. Use
+absolute paths, as the existing two do, so the binary runs from any working
+directory and from a Condor scratch dir.
+
+Then re-run §5 and §7.3: a new shared library is exactly the kind of thing that
+works on the login node and fails on a worker, because the login node has paths
+a worker does not.
 
 ### The LCG view, and the fallback
 
@@ -443,10 +509,12 @@ helpers.set_svj_scan_path('/eos/user/l/lbojorqu/svj/scans/svj_scan.npz')
 
 ## 9. Known gaps
 
-- The array `.sub` files (`scan`, `tsv`, `validation`) have not been submitted
-  at full size. They share all their plumbing with `smoke.sub` via
-  `_common.inc`, so §7.3 covers the risky part, but job flavours and the larger
-  `request_cpus` / `request_memory` / `request_disk` values are unexercised.
+- An array has not been run at full production size. The 64-point / 4-job run
+  that validated `scan.sub`'s mechanics used `request_cpus = 8` and
+  `microcentury`; `queue 16` with `request_cpus = 16` and `tomorrow` is untried.
+- `tools/build_deps.sh` builds PYTHIA and FastJet only. Anything else the
+  generator comes to depend on needs adding there, and to the `$SVJ_DEPS=local`
+  branch of `setup_env.sh`.
 - `merge_svj_validation.py` hardcodes `N_JOBS = 16` and the shard path pattern.
 - The `validation` workflow's `--N3 125` and the `tsv` workflow's overrides are
   hardcoded in `condor/svj_job.sh`; edit them there, not in the `.sub`.
@@ -456,10 +524,10 @@ helpers.set_svj_scan_path('/eos/user/l/lbojorqu/svj/scans/svj_scan.npz')
 - `setup_env.sh` pins `LCG_110/x86_64-el9-gcc13-opt` for Python. LCG views are
   eventually removed from CVMFS; when that one goes, `export LCG_VIEW=...` to a
   newer one (§2). With local PYTHIA/FastJet builds the C++ side is unaffected,
-  but the Python stack still follows the view.
-- `tools/build_deps.sh` pins PYTHIA 8317 and FastJet 3.5.1 in two shell
-  variables at the top. Bumping either is a one-line change plus a rebuild, but
-  nothing verifies that the repo's observable code still matches a new PYTHIA.
-- Writing job `.out`/`.err` to EOS is broken, not merely discouraged (§7.2). If
-  a future lxplus release fixes it, the AFS split in `_common.inc` could be
-  dropped — retest before assuming so.
+  but the Python stack follows the view.
+- `tools/build_deps.sh` pins PYTHIA 8317 and FastJet 3.5.1 in two variables at
+  the top. Bumping either is a one-line change plus a rebuild, but nothing
+  verifies that the repo's observable code still matches a new PYTHIA.
+- Job `.out`/`.err` cannot be written to EOS (§7.2). If a future lxplus release
+  changes that, the AFS split in `_common.inc` could be dropped — retest before
+  assuming so.
