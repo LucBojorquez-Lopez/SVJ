@@ -11,10 +11,12 @@ pip install numpy "scipy>=1.6" tqdm pytest
 ```
 
 These are the same packages installed by GitHub CI (see `.github/workflows/ci.yml`).
+Matplotlib and the Jupyter stack are **not** needed for the tests — see
+[setup.md](setup.md) for the full environment.
 
 ## Run all tests
 
-From the project root (`mySVJ/`):
+From the project root (`SVJ/`):
 
 ```bash
 pytest tests/ -v

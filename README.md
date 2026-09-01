@@ -30,7 +30,27 @@ The GUI exposes this pipeline interactively: physics sliders trigger a re-interp
 
 ## Minimal example
 
-After completing [setup](docs/setup.md), the full workflow is:
+A scan is shipped with the repository, so sampling works straight after
+cloning — no simulation and no C++ build required:
+
+```python
+import numpy as np, sys; sys.path.insert(0, 'src')
+import helpers
+
+R_upper, obs_params, param_offsets, obs_names = helpers.interpolate_svj_params(
+    {'mZ': 1500, 'rinv_pion': 0.3, 'mRho': 20.0, 'alphaD': 0.4})
+
+X = helpers.sample_svj_new(R_upper, obs_params, param_offsets, obs_names,
+                           n_samples=50_000)
+X = X[np.isfinite(X).all(axis=1)]   # see docs/api.md — extreme-tail NaNs
+# X: (~50000, 11) array in original physical units, columns ordered as obs_names
+```
+
+This loads `simulated/svj/working_example/` — a complete 4-axis
+(`mZ`, `rinv_pion`, `mRho`, `alphaD`) × 11-observable scan. A larger 6-axis
+scan is also included; see [docs/api.md](docs/api.md) to switch between them.
+
+To generate your own events and scans, complete [setup](docs/setup.md), then:
 
 ```bash
 # 1. Build the C++ event generator
@@ -43,20 +63,6 @@ src/generate_events/svj_regression src/generate_events/svj_regression.cfg
 # 3. Run the parameter scan (edit scan_regression.cfg first to configure the grid)
 python src/run_regression/scan_svj.py src/run_regression/scan_regression.cfg
 # → simulated/svj/svj_scan.npz
-```
-
-Once the scan NPZ is ready, sample from the interpolated distribution at any point:
-
-```python
-import sys; sys.path.insert(0, 'src')
-import helpers
-
-R_upper, obs_params, param_offsets, obs_names = helpers.interpolate_svj_params(
-    {'mZ': 1500, 'jetR': 0.6, 'rinv_pion': 0.3, 'Brmu': 0.3})
-
-X = helpers.sample_svj_new(R_upper, obs_params, param_offsets, obs_names,
-                            n_samples=50_000)
-# X: (50000, n_obs) array in original physical units
 ```
 
 Or launch the interactive GUI:
@@ -74,11 +80,13 @@ show()
 ## Directory layout
 
 ```
-mySVJ/
-├── Makefile                       Build target: make svj_regression  (not in git; see docs/setup.md)
+SVJ/
+├── Makefile                       make svj_regression | check-deps | clean
 ├── run_svj_scan.sh                SLURM array job: parameter scan → svj_scan.npz
 ├── run_svj_tsv.sh                 SLURM array job: batch TSV generation
+├── run_svj_validation.sh          SLURM array job: production validation
 ├── merge_svj_tsv.sh               Merge per-job TSV shards after run_svj_tsv.sh
+├── merge_svj_validation.py        Merge per-task NPZs after run_svj_validation.sh
 ├── src/
 │   ├── generate_events/
 │   │   ├── svj_regression.cc      C++ event generator (PYTHIA8 + FastJet)
@@ -86,18 +94,26 @@ mySVJ/
 │   ├── run_regression/
 │   │   ├── scan_svj.py            Main scan script (grid → svj_scan.npz)
 │   │   ├── scan_regression.cfg    Config for scan_svj.py (grid axes, physics params)
-│   │   └── fit_raw.py             Re-fit from saved raw events (no re-simulation)
+│   │   ├── fit_raw.py             Re-fit from saved raw events (no re-simulation)
+│   │   ├── validate_fit.py        Marginal fit quality from a single TSV
+│   │   ├── validate_grid.py       Interpolation quality vs PYTHIA truth
+│   │   ├── validate_production.py Full benchmark incl. nearest-grid + MMD
+│   │   └── _val_utils.py          Shared validation utilities (JS, MMD, sampling)
 │   ├── gui/
 │   │   └── svj_explorer.py        Jupyter notebook interactive explorer
 │   ├── observables.py             Observable / transform / distribution registry
 │   ├── helpers.py                 NPZ interpolation helpers + KLD utilities
-│   └── diagnostics.py             Transform pipeline diagnostic plots
+│   └── diagnostics.py             Transform pipeline + validation plots
+├── tests/                         pytest suite (211 tests, no PYTHIA needed)
 ├── docs/                          Extended documentation (see below)
-├── old_version/                   Archived v1 (gennorm + MVN copula, self-contained)
 └── simulated/
-    ├── svj/svj_scan.npz           Output of scan_svj.py  (created on first scan run)
-    ├── tsv/jets_default.tsv       TSV output of single binary run (created on first run)
-    └── v1/regression_scan.npz    V1 archived data (gennorm + MVN copula, 12 obs)
+    ├── svj/working_example/       DEFAULT scan: 4 axes × 11 observables
+    │   ├── svj_scan.npz             + svj_scan_meta.json
+    │   └── validation_production.npz
+    ├── svj/svj_scan.npz           Larger 6-axis × 16-observable scan
+    ├── svj/validation_production.npz   2000-point validation of the above
+    ├── tsv/                       Generated TSVs (gitignored; created on first run)
+    └── v1/regression_scan.npz     Archived v1 grid; backs the KLD utilities only
 ```
 
 ---
@@ -117,4 +133,3 @@ Full reference documentation is in [`docs/`](docs/):
 | NPZ file formats | [docs/npz-format.md](docs/npz-format.md) |
 | Validation | [docs/validation.md](docs/validation.md) |
 | Running the unit tests | [docs/testing.md](docs/testing.md) |
-| Old version (v1) | [docs/old-version.md](docs/old-version.md) |

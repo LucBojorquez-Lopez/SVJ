@@ -46,7 +46,9 @@ from observables import OBSERVABLES, DEFAULT_SCAN, event_valid_mask, load_tsv
 
 _BINARY      = str(_HERE.parent / 'generate_events' / 'svj_regression')
 _DEFAULT_CFG = str(_HERE.parent / 'generate_events' / 'svj_regression.cfg')
-_META_PATH   = _REPO / 'simulated' / 'svj' / 'svj_scan_meta.json'
+# Follows helpers' default scan (the working example) unless show(scan_dir=...)
+# overrides it.
+_META_PATH   = helpers.DEFAULT_SCAN_DIR / 'svj_scan_meta.json'
 
 # Per-parameter slider step sizes (used when building dynamic sliders)
 _PARAM_STEPS = {

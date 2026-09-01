@@ -284,7 +284,7 @@ def _worker(args):
         # Capture C++ peak RSS immediately after binary exits (RUSAGE_CHILDREN
         # accumulates across all subprocess.run calls in this worker process).
         cpp_peak_kb = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
-        fail = (grid_indices, None, None, None, None, None, cpp_peak_kb)
+        fail = (grid_indices, None, None, None, None, cpp_peak_kb)
 
         if proc.returncode != 0:
             return fail
@@ -592,13 +592,15 @@ def main():
         for fut in as_completed(futs):
             try:
                 result = fut.result()
+                # Unpack inside the guard: a malformed result tuple must be
+                # counted as one failed point, never kill a multi-hour scan.
+                gidx, flat_p, R_upper, raw_X, n_disc, cpp_rss_kb = result
             except Exception as e:
                 print(f"  WARNING: worker exception: {e}", flush=True)
                 failed += 1
                 done   += 1
                 continue
 
-            gidx, flat_p, R_upper, raw_X, n_disc, cpp_rss_kb = result
             done += 1
             ok    = flat_p is not None
 

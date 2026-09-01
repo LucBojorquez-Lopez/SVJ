@@ -1,9 +1,23 @@
-Makefile
-*.ipynb
+# Build products
 src/generate_events/svj_regression
+
+# Notebooks — the GUI is driven from a scratch notebook per user
+*.ipynb
+
+# Cluster job logs
 logs/
+
+# Python bytecode / test cache
 __pycache__/
 *.py[cod]
 .pytest_cache/
+
+# Large regenerable simulation outputs.
+# Raw TSVs run to tens of MB each and are the single biggest source of git
+# history bloat in this repo — they are reproducible from the binary plus a
+# cfg, so they stay out of version control.  Use -f to force-add a small one
+# you deliberately want to ship as a fixture.
+simulated/tsv/*.tsv
+simulated/svj/*_raw.npz
 simulated/tsv/report_figures/
 simulated/tsv/play_around/

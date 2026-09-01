@@ -176,10 +176,31 @@ class TestAbsValue:
         y = TRANSFORMS['abs_value']['forward'](x, ())
         assert np.all(y >= 0)
 
-    def test_inverse_is_identity_for_non_negative(self):
+    def test_inverse_preserves_magnitude(self):
+        # The inverse reconstructs a signed sample by alternating signs, so it
+        # is magnitude-preserving rather than an identity.  Valid only when the
+        # underlying signed distribution is symmetric about 0.
         y = np.array([0.0, 0.5, 1.0, 2.5])
         x = TRANSFORMS['abs_value']['inverse'](y, ())
-        np.testing.assert_allclose(x, y)
+        np.testing.assert_allclose(np.abs(x), y)
+
+    def test_inverse_alternates_signs(self):
+        y = np.array([0.0, 0.5, 1.0, 2.5])
+        x = TRANSFORMS['abs_value']['inverse'](y, ())
+        np.testing.assert_allclose(x, [0.0, -0.5, 1.0, -2.5])
+
+    def test_inverse_does_not_mutate_input(self):
+        y     = np.array([0.0, 0.5, 1.0, 2.5])
+        y_ref = y.copy()
+        TRANSFORMS['abs_value']['inverse'](y, ())
+        np.testing.assert_allclose(y, y_ref)
+
+    def test_inverse_is_balanced_in_sign(self):
+        # Roughly half the reconstructed sample must be negative, otherwise the
+        # symmetry assumption the transform relies on would not be reproduced.
+        y = np.abs(_RNG.normal(size=1000))
+        x = TRANSFORMS['abs_value']['inverse'](y, ())
+        assert np.isclose((x < 0).mean(), 0.5, atol=0.01)
 
     def test_n_fitted_is_zero(self):
         assert TRANSFORMS['abs_value']['n_fitted'] == 0

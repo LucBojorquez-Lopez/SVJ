@@ -64,7 +64,7 @@ mZ = 500, 4000, 8, log
 ## Run the scan — standard (no raw saving)
 
 ```bash
-# From the project root (mySVJ/):
+# From the project root (SVJ/):
 python src/run_regression/scan_svj.py src/run_regression/scan_regression.cfg
 ```
 
@@ -98,14 +98,22 @@ raw_flat       shape (total_events, n_obs)   — pre-transform values
 raw_grid_flat  shape (total_events, K)        — grid indices per axis (K = number of scan axes)
 ```
 
-> **Storage estimate**: with `nEvent=2000` and 12 observables over a 8⁴ grid,
-> raw data is ~4096 × 2000 × 12 × 8 bytes ≈ **786 MB**.
+> **Storage estimate**: with `nEvent=2000` and 12 observables over an 8⁴ grid,
+> raw data is ~4096 × 2000 × 12 × 8 bytes ≈ **786 MB**. `*_raw.npz` is
+> gitignored for this reason.
 
 ## Select which observables to scan
 
-The default set is `DEFAULT_SCAN` in `src/observables.py`
-(currently 12 observables: leadVisPt, leadWidth, MET, maxMuPt, jetThrust,
-hemiMass1, hemiMass2, e2c, e3c, tau1, tau2, tau3).
+The default set is `DEFAULT_SCAN` in `src/observables.py` — every observable
+whose entry has `default_include: True`. It currently holds 16:
+
+```
+leadVisPt, leadWidth, MET, maxMuPt, jetThrust, hemiMass1, e2c, e3c,
+tau1, tau2, tau3, dPhiMETclose, HT, Meff, leadJetMass, nConst
+```
+
+28 base observables are available in total; see
+[extending-observables.md](extending-observables.md).
 
 Override from the command line with `--obs`:
 
@@ -122,13 +130,20 @@ and each must have a non-`None` `pipeline` and `distribution`.
 A ready-to-use SLURM array script is at the project root:
 
 ```bash
-sbatch run_svj_scan.sh          # submits a 4-task array (tasks 0–3)
+sbatch run_svj_scan.sh          # as shipped: a 16-task array (tasks 0–15)
 
 # After all tasks finish, merge their partial NPZs:
-python src/run_regression/scan_svj.py --merge --n-jobs 4
+python src/run_regression/scan_svj.py --merge --n-jobs 16
 ```
 
-Edit `run_svj_scan.sh` to change the array size, partition, or resource requests.
+The array size is set in **two** places that must agree: the `#SBATCH
+--array=0-15` directive and the `N_JOBS=16` shell variable further down. Change
+both, and pass the same number to `--merge`.
+
+> These scripts are SLURM-specific and hardcode a Harvard partition
+> (`-p arguelles_delgado`), a notification address, and
+> `source ~/venvs/svj/bin/activate`. They need translating before use on
+> another batch system — see the lxplus notes in [setup.md](setup.md).
 To split manually:
 
 ```bash

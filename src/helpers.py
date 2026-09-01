@@ -25,6 +25,19 @@ except ImportError:
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
+# ── Default scan ──────────────────────────────────────────────────────────────
+# The "working example" shipped with the repository: a complete 4-axis
+# (mZ, rinv_pion, mRho, alphaD) × 11-observable scan, small enough to clone
+# comfortably and validated end to end.  It is what every example in the README
+# and docs/ runs against.
+#
+# Other scans — including the larger 6-axis scan in simulated/svj/ — are opted
+# into explicitly:
+#     helpers.set_svj_scan_path('simulated/svj/svj_scan.npz')   # API
+#     svj_explorer.show(scan_dir='simulated/svj/')              # GUI
+DEFAULT_SCAN_DIR = _REPO_ROOT / 'simulated' / 'svj' / 'working_example'
+DEFAULT_SCAN_NPZ = DEFAULT_SCAN_DIR / 'svj_scan.npz'
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Lazy-loaded NPZ data
@@ -32,7 +45,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 _v1_data      = None   # v1 regression_scan.npz
 _svj_data     = None   # svj_scan.npz
-_svj_scan_path = None  # override path (None → default simulated/svj/svj_scan.npz)
+_svj_scan_path = None  # override path (None → DEFAULT_SCAN_NPZ, the working example)
 
 
 def _load_v1():
@@ -44,7 +57,7 @@ def _load_v1():
         except FileNotFoundError:
             raise FileNotFoundError(
                 f"regression_scan.npz not found at {path}. "
-                "Run the v1 scan first, or use old_version/.")
+                "This archived v1 grid backs the KLD utilities only.")
     return _v1_data
 
 
@@ -57,7 +70,8 @@ def set_svj_scan_path(path):
     ----------
     path : str | Path | None
         Path to svj_scan.npz.  Pass None to restore the default
-        (simulated/svj/svj_scan.npz relative to the repo root).
+        (DEFAULT_SCAN_NPZ — the working example under
+        simulated/svj/working_example/).
     """
     global _svj_scan_path, _svj_data, _svj_interp, _svj_meta
     _svj_scan_path = Path(path) if path is not None else None
@@ -69,14 +83,14 @@ def set_svj_scan_path(path):
 def _load_svj():
     global _svj_data
     if _svj_data is None:
-        path = _svj_scan_path if _svj_scan_path is not None \
-               else _REPO_ROOT / 'simulated/svj/svj_scan.npz'
+        path = _svj_scan_path if _svj_scan_path is not None else DEFAULT_SCAN_NPZ
         try:
             _svj_data = np.load(path, allow_pickle=True)
         except FileNotFoundError:
             raise FileNotFoundError(
                 f"SVJ scan NPZ not found at {path}.\n"
-                "Run scan_svj.py first.")
+                "Run scan_svj.py first, or point set_svj_scan_path() at an "
+                "existing scan.")
     return _svj_data
 
 

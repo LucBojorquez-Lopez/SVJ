@@ -23,7 +23,10 @@ The companion `svj_scan_meta.json` stores `scan_axes`, `fixed_params`, and
 
 ## V1 format (`simulated/v1/regression_scan.npz`)
 
-Older 3-observable MVT fit (pT, jet width, MET). Used by `old_version/helpers.py` only.
+Archived 3-observable multivariate-t fit (pT, jet width, MET). Retained only
+because the KLD utilities in `src/helpers.py` (`kld_params`, `KLD`,
+`neighbor_kld_grid`, `corner_kld_grid`) operate on its 10-parameter vectors.
+Nothing in the current pipeline reads or writes it.
 
 | Key | Shape | Description |
 |-----|-------|-------------|
@@ -33,5 +36,3 @@ Older 3-observable MVT fit (pT, jet width, MET). Used by `old_version/helpers.py
 | `scan_param_names` | `(6,)` | Names for the `scan_params` columns |
 | `mZ_vals`, `mRho_vals`, `rinv_vals`, `alphaD_vals` | 1-D | Grid axis values |
 
-> **Note:** The gennorm + MVN copula format (keys `corr_params`, `transform_params`, `obs_names`)
-> is in `old_version/simulated/gennorm/gennorm_scan.npz`, used by the `old_version/` GUI.

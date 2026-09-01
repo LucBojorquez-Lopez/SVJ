@@ -391,11 +391,13 @@ class TestForwardInverseRoundtrip:
         np.testing.assert_allclose(x_back, x, rtol=1e-3)
 
     def test_abs_affine_boxcox_gennorm(self):
-        # All positive angles so abs_value is identity
+        # This is the dPhiMETfar pipeline.  abs_value's inverse reconstructs a
+        # signed sample by alternating signs, so the roundtrip recovers the
+        # MAGNITUDE of each input, not the input itself.
         x = _rng(22).uniform(0.01, np.pi - 0.01, size=300)
         x_back, _ = self._roundtrip(
             x, [('abs_value', {}), ('affine_flip', {'a': np.pi}), ('boxcox', {})], 'gennorm')
-        np.testing.assert_allclose(x_back, x, rtol=1e-3)
+        np.testing.assert_allclose(np.abs(x_back), x, rtol=1e-3)
 
     def test_forward_consistent_with_fit(self):
         """forward_observable_col with fitted params must equal fit output."""

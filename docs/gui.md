@@ -2,7 +2,8 @@
 
 ## Quick start
 
-Open `gui.ipynb` (or a new notebook) from the project root and run:
+Create a notebook at the project root (notebooks are gitignored — the GUI is
+driven from a scratch notebook per user) and run:
 
 ```python
 %matplotlib widget
@@ -12,7 +13,9 @@ from svj_explorer import show
 show()
 ```
 
-The GUI loads `simulated/svj/svj_scan.npz` automatically.
+The GUI loads the default scan automatically — `simulated/svj/working_example/`,
+the same one `helpers` uses. Sliders, dropdowns and cut panels are all built
+from whatever axes and observables that NPZ contains.
 
 ## GUI controls
 
@@ -37,12 +40,13 @@ show(n_samples=10_000, scan_dir=None)
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `n_samples` | 10 000 | Initial number of model samples per draw |
-| `scan_dir` | None | Path to a directory containing `svj_scan.npz` and `svj_scan_meta.json`. When `None`, the default `simulated/svj/` directory is used. |
+| `scan_dir` | None | Path to a directory containing `svj_scan.npz` and `svj_scan_meta.json`. When `None`, `helpers.DEFAULT_SCAN_DIR` (`simulated/svj/working_example/`) is used. |
 
-To load a scan from a custom location:
+To load a different scan — for instance the larger 6-axis one:
 
 ```python
-show(scan_dir='path/to/my_scan/')
+show(scan_dir='simulated/svj/')          # 6 axes, 16 observables
+show(scan_dir='path/to/my_scan/')        # any scan you produced yourself
 ```
 
 Both `svj_scan.npz` and `svj_scan_meta.json` must be present in that directory.
