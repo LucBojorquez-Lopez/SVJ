@@ -118,7 +118,7 @@ pip install numpy "scipy>=1.6" matplotlib tqdm pytest ipywidgets ipympl jupyterl
 Confirm the analysis side works before touching the C++ build:
 
 ```bash
-pytest tests/ -v          # 211 tests, no PYTHIA or NPZ required
+pytest tests/ -v          # 229 tests, no PYTHIA or NPZ required
 ```
 
 ---

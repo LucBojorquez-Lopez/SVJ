@@ -15,6 +15,13 @@ things built on top of the same ROOT/Delphes dependencies:
   *why* Delphes reconstruction changes a given event (paired truth/Delphes
   output, outlier finding, constituent-level lego plots).
 
+> **On lxplus/EOS, do not follow this page's build steps.** There, ROOT comes
+> from the LCG view and Delphes is built by `tools/build_deps.sh --delphes`
+> into `$SVJ_WORK` — see [lxplus.md](lxplus.md) §2, "Building Delphes". The
+> sibling-directory layout below is the *local workstation* arrangement. What
+> stays true on both: the `make` targets, the cfg keys, and everything from
+> "Production binary" onward.
+
 ## New dependencies
 
 Two new sibling directories, alongside the existing `pythia8317/` and
@@ -90,51 +97,52 @@ version (`2020.1-2`). A newer TBB from conda-forge (`oneTBB`, 2021+) does
 **not** work here -- it dropped the `tbb::task`-based API this ROOT build
 expects, so don't install TBB via conda instead of `apt`.
 
-## Makefile addition
+## Building
 
-The project's `Makefile` is not tracked in git (see `docs/setup.md`) --
-add these targets to your own local copy, alongside the existing
-`svj_regression` target:
+Both binaries are `Makefile` targets — nothing to add by hand:
 
-```makefile
-ROOT_DIR    = ../root
-DELPHES_DIR = ../delphes3.5.1
-
-src/generate_events/svj_regression_delphes: src/generate_events/svj_regression_delphes.cc
-	$(CXX) $< -o $@ $(CXX_COMMON) \
-	  -I$(DELPHES_DIR) -I$(DELPHES_DIR)/external \
-	  $(shell $(ROOT_DIR)/bin/root-config --cflags --libs) -lEG \
-	  -L$(DELPHES_DIR) -Wl,-rpath,$(DELPHES_DIR) -lDelphes
-
-.PHONY: svj_regression_delphes
-svj_regression_delphes: src/generate_events/svj_regression_delphes
-
-src/generate_events/svj_delphes_test: src/generate_events/svj_delphes_test.cc
-	$(CXX) $< -o $@ $(CXX_COMMON) \
-	  -I$(DELPHES_DIR) -I$(DELPHES_DIR)/external \
-	  $(shell $(ROOT_DIR)/bin/root-config --cflags --libs) -lEG \
-	  -L$(DELPHES_DIR) -Wl,-rpath,$(DELPHES_DIR) -lDelphes
-
-.PHONY: svj_delphes_test
-svj_delphes_test: src/generate_events/svj_delphes_test
+```bash
+make svj_regression_delphes     # production binary
+make svj_delphes_test           # diagnostic driver
+make delphes                    # both
+make check-delphes-deps         # verify ROOT + libDelphes; build nothing
 ```
 
-This reuses `$(CXX_COMMON)` (already has the Pythia8/FastJet flags from the
-existing template) and layers Delphes/ROOT flags on top.
+The Makefile finds ROOT and Delphes like this, and either can be overridden:
 
-**Target naming**: the file-producing rule's target must be the *full
-path* (`src/generate_events/svj_regression_delphes`), not the bare name --
-`make` runs from the project root, so a bare target name writes the binary
-to the repo root instead of `src/generate_events/`. Use the two-rule
-pattern above (a real file-path rule plus a `.PHONY` alias for the short
-name), matching the existing `svj_regression` target.
+| variable | default | notes |
+|---|---|---|
+| `ROOT_CONFIG` | `root-config` on `PATH`, else `../root/bin/root-config` | the LCG view puts it on `PATH`; the fallback is the local layout above |
+| `DELPHES_DIR` | `../delphes3.5.1` | a **source tree**, not a prefix — Delphes ships no `make install` |
 
-**`-lEG`**: `root-config --libs` alone does not include ROOT's `libEG`
-(Event Generator interface), where `TDatabasePDG`/`TParticlePDG` live --
-both binaries use them directly, and several Delphes modules use them
-internally. Delphes' own top-level `Makefile` appends `-lEG` on top of
-`root-config --libs` for the same reason
+```bash
+make delphes DELPHES_DIR=/somewhere/Delphes-3.5.1 ROOT_CONFIG=/opt/root/bin/root-config
+```
+
+Three details in those rules are worth knowing, because each one cost a
+debugging session:
+
+**`-lEG`.** `root-config --libs` does *not* include ROOT's `libEG` (Event
+Generator interface), where `TDatabasePDG` / `TParticlePDG` live. Both binaries
+use them directly and several Delphes modules use them internally. Delphes' own
+Makefile appends `-lEG` for exactly the same reason
 (`DELPHES_LIBS = $(shell $(RC) --libs) -lEG`).
+
+**`ROOT_CONFIG` is tested for emptiness, not definedness.** PYTHIA's
+`examples/Makefile.inc` — which the Makefile `-include`s whenever PYTHIA came
+from a source build, the normal case on lxplus — sets `ROOT_CONFIG=` when PYTHIA
+was configured without ROOT. That counts as "already defined", so a plain `?=`
+would silently never fire and the delphes targets would die on an empty
+root-config path. Hence the `ifeq ($(strip $(ROOT_CONFIG)),)` guard.
+
+**Full-path targets.** The file-producing rules use the full path
+(`$(GEN)/svj_regression_delphes`) with a `.PHONY` short alias, matching
+`svj_regression`. `make` runs from the repo root, so a bare target name would
+write the binary to the repo root instead of `src/generate_events/`.
+
+`svj_observables_common.h` is a prerequisite of `svj_regression` and
+`svj_regression_delphes` (not of `svj_delphes_test`, which does not include it),
+so editing a shared observable rebuilds both rather than leaving a stale binary.
 
 ## Production binary: `svj_regression_delphes`
 

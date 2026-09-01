@@ -9,7 +9,9 @@ rebuild**.
 > `condor/smoke.sub`, a 64-point scan run both locally and as a 4-job Condor
 > array, the `--merge` step, and `fit_raw.py`.
 >
-> Not verified: an array at full production size. `queue 16` with
+> Not verified: anything Delphes (§2 "Building Delphes", §5 rung 5,
+> `condor/tsv_delphes.sub`) — written and working locally, never run on lxplus.
+> Also not verified: an array at full production size. `queue 16` with
 > `request_cpus = 16` and the longer job flavours are untried; everything those
 > files do apart from the scale is shared with `smoke.sub` via `_common.inc`.
 > Run §7.3 before any array — it costs a minute.
@@ -30,11 +32,13 @@ git clone https://github.com/LucBojorquez-Lopez/SVJ.git && cd SVJ   # §3
 source setup_env.sh                                                 # §2
 
 # 3. Dependencies.  ~20 min.  Skip to run against the LCG view instead.
+#    Add --delphes (+~10 min) for the detector-level generator as well.
 bash tools/build_deps.sh                                            # §2
 source setup_env.sh          # re-source; $SVJ_DEPS should now say `local`
 
 # 4. Generator.
 make svj_regression                                                 # §4
+make delphes                 # ONLY if you passed --delphes above    # §2
 
 # 5. Verify locally, cheapest first.
 pytest tests/ -q                                                    # §5
@@ -57,7 +61,9 @@ existing setup is safe and cheap.
 | `$SVJ_WORK` (PYTHIA, FastJet — a sibling of the repo, not inside it) | yes, reused |
 | `$SVJ_AFS` (`~/.svj`: launcher, logs) | yes, launcher re-synced from the repo |
 | x509 proxy | yes, until it expires |
+| `$SVJ_WORK/delphes-3.5.1` (if built) | yes, reused |
 | `svj_regression` binary | **no** — gitignored, rebuild with `make` |
+| `svj_regression_delphes`, `svj_delphes_test` | **no** — gitignored, `make delphes` |
 | Downloaded PYTHIA/FastJet tarballs | cached in `$SVJ_WORK`, not re-fetched |
 
 Rebuild the generator (`make clean && make svj_regression`) whenever you switch
@@ -78,6 +84,9 @@ binary's rpath at link time.
 | **FastJet 3.5.1** | ❌ | yes — same script, ~2 min (§2) |
 | Python environment | ❌ | **no** — comes from CVMFS (§2) |
 | **`svj_regression` binary** | ❌ gitignored | yes — one 4-second `make` (§4) |
+| **ROOT** | ❌ | **no** — comes from CVMFS (§2) |
+| **Delphes 3.5.1** *(optional)* | ❌ | only for the detector-level binaries (§2) |
+| **`svj_regression_delphes`, `svj_delphes_test`** | ❌ gitignored | `make delphes` (§2) |
 | Raw TSVs (`simulated/tsv/*.tsv`) | ❌ gitignored | regenerate as needed |
 
 The important consequence: **interpolation, sampling, the GUI and every
@@ -106,6 +115,8 @@ FastJet it selected via `$SVJ_DEPS`.
 |---|---|
 | Python 3.13, numpy, scipy, matplotlib, tqdm, pytest, jupyter | LCG view on CVMFS |
 | PYTHIA 8.317, FastJet 3.5.1 | **our own builds** under `$SVJ_WORK`, with the LCG view as fallback |
+| ROOT | LCG view **only** — no local build, and none wanted |
+| Delphes 3.5.1 *(optional)* | **our own build** under `$SVJ_WORK`; no fallback, the view ships none |
 | Compiler for `svj_regression` | the **system** gcc when using our builds; the view's gcc 13 when falling back |
 
 Python comes from CVMFS because a self-built stack is not worth it here: the
@@ -155,10 +166,67 @@ Two choices inside it are deliberate:
 `-j4`, not `-j$(nproc)`: lxplus login nodes are shared and routinely sit above
 a load average of their core count.
 
+### Building Delphes (optional)
+
+Only two things need it — `svj_regression_delphes` (detector-level events) and
+`svj_delphes_test` (truth-vs-reco comparison). Nothing on the Python side
+imports it, so skipping this costs you those two binaries and nothing else.
+
+```bash
+source setup_env.sh
+bash tools/build_deps.sh --delphes        # or --only-delphes on an existing setup
+source setup_env.sh                       # re-source
+echo "$SVJ_DELPHES"                       # -> local
+make delphes                              # both binaries
+```
+
+`$SVJ_DELPHES` reports what happened, and distinguishes the two ways it can be
+unusable:
+
+| value | meaning |
+|---|---|
+| `local` | tree found under `$SVJ_WORK`, ROOT on `PATH` — ready |
+| `no-root` | Delphes tree present but no `root-config`; the view is wrong or unsourced |
+| `none` | no Delphes tree; run `tools/build_deps.sh --only-delphes` |
+
+**Delphes does not install like the other two.** It has no `configure --prefix`
+and ships no `make install`: the build leaves `libDelphes.so` sitting *inside
+its own source tree*, next to the headers the `Makefile` includes. So
+`$DELPHES_DIR` points at a **source tree**, not at a prefix like `$PYTHIA_DIR`
+and `$FASTJET_DIR` do. The "install" is a copy of the whole tree into
+`$SVJ_WORK/delphes-3.5.1`, with the `.o` files deleted first — they are needed
+neither to link nor to run, and tens of thousands of small files is precisely
+what EOS handles worst.
+
+Two things it needs that the other builds do not:
+
+- **ROOT**, from the LCG view. There is deliberately no local ROOT build: it is
+  far too large to put behind a 2 GB AFS quota, and unlike PYTHIA it is not a
+  thing this project has any reason to patch. This is the one dependency with
+  no fallback — when the pinned view goes, Delphes goes with it, whereas the
+  C++ side of PYTHIA/FastJet keeps working.
+- **`tclsh`**. Delphes' `./configure` is a one-line script that runs
+  `tclsh ./doc/genMakefile.tcl > Makefile`. `build_deps.sh` checks for both up
+  front and fails with a readable message rather than part-way through a build.
+
+**It is built `HAS_PYTHIA8=true` against `$PYTHIA_DIR`** — the same PYTHIA the
+generators link. That coupling is not cosmetic: `libDelphes.so` ends up with a
+`NEEDED` entry on `libpythia8.so`, and if it were built against a *different*
+PYTHIA than the executable loads, the two would disagree about Pythia8's ABI at
+runtime. The failure mode is a crash somewhere inside Delphes, not a link
+error, so it is worth getting right the first time.
+
+> **Verified locally, not yet on lxplus.** Both binaries build and run against
+> ROOT 6.34 / Delphes 3.5.1 on a local box (a 20-event
+> `svj_regression_delphes` run writes a complete TSV). The `--delphes` path of
+> `build_deps.sh` has **not** been exercised on lxplus — the CVMFS ROOT, the
+> presence of `tclsh`, and the build time are all unconfirmed there. Expect to
+> debug this step; §9 lists what is most likely to bite.
+
 ### Adding another dependency
 
-If the generator grows a dependency beyond PYTHIA and FastJet — a detector
-simulation, say — it has to be added in two places, and both matter:
+Delphes above is the worked example of exactly this, and it is worth reading as
+one. Anything further has to be added in the same two places, and both matter:
 
 1. **`tools/build_deps.sh`** — fetch, configure with its **final** `$SVJ_WORK`
    prefix, build on local disk, copy in. Extend the relocatability check at the
@@ -235,6 +303,15 @@ make check-deps            # confirms both are findable; builds nothing
 make svj_regression        # ~4 seconds
 ```
 
+For the detector-level binaries as well:
+
+```bash
+bash tools/build_deps.sh --delphes   # adds Delphes; needs ROOT + tclsh (§2)
+source setup_env.sh                  # $SVJ_DELPHES -> local
+make check-delphes-deps              # confirms ROOT + libDelphes; builds nothing
+make delphes                         # svj_regression_delphes + svj_delphes_test
+```
+
 `PYTHIA_DIR` / `FASTJET_DIR` come from `setup_env.sh`, so plain
 `make svj_regression` is all you ever type. Both are resolved to **absolute**
 paths and written into the binary's rpath, so the executable runs from any
@@ -283,7 +360,7 @@ are measured on an lxplus login node.
 source setup_env.sh
 
 # 1. Analysis code only — no PYTHIA, no NPZ.               ~2 s
-pytest tests/ -q                                  # expect 211 passed
+pytest tests/ -q                                  # expect 229 passed
 
 # 2. The shipped scan interpolates and samples.            ~5 s
 python -c "
@@ -304,6 +381,24 @@ wc -l simulated/tsv/jets_default.tsv               # expect 49999
 python src/run_regression/scan_svj.py src/run_regression/scan_smoke.cfg
 # → simulated_smoke/svj/svj_scan.npz, param_flat (1,1,1,1,1,1,184)
 ```
+
+If you built Delphes, add one more rung. Keep it small: the detector
+simulation is far slower per event than the truth generator, and single
+threaded.
+
+```bash
+# 5. The Delphes binary runs.  20 events, one thread.       ~seconds
+sed -e 's/^nEvent.*/nEvent = 20/' \
+    -e "s|^tsv_file.*|tsv_file = ${TMPDIR:-/tmp}/jets_delphes_smoke.tsv|" \
+    src/generate_events/svj_regression_delphes.cfg > "${TMPDIR:-/tmp}/delphes_smoke.cfg"
+src/generate_events/svj_regression_delphes "${TMPDIR:-/tmp}/delphes_smoke.cfg"
+wc -l "${TMPDIR:-/tmp}/jets_delphes_smoke.tsv"     # expect 21 (header + 20)
+```
+
+It should print `** INFO: initializing module ...` lines for the Delphes
+modules, then the FastJet banner, then `Wrote 20 / 20 kept events`. A crash
+between those two points usually means `libDelphes.so` and the binary disagree
+about PYTHIA — see the `HAS_PYTHIA8` note in §2.
 
 Step 4 uses the committed `scan_smoke.cfg` — one grid point at 2000 events.
 It writes to `simulated_smoke/`, deliberately not `simulated/`, because a
@@ -463,6 +558,26 @@ bash merge_svj_tsv.sh 4          # after all jobs finish
 Each job gets a distinct `seed_offset`, so PYTHIA seeds never overlap — see the
 seed table in [running-a-scan.md](running-a-scan.md).
 
+For detector-level shards, `condor/tsv_delphes.sub` runs the same `tsv`
+workflow with `SVJ_BINARY=svj_regression_delphes` in its `environment` line:
+
+```bash
+condor_submit condor/tsv_delphes.sub
+bash merge_svj_tsv.sh 8 --binary svj_regression_delphes
+```
+
+The two write different files — `jets_delphes_N.tsv` against
+`jets_default_N.tsv` — so they can run at the same time without colliding.
+`merge_svj_tsv.sh` derives the same tag from `--binary`, and it has to be
+passed: merging Delphes shards without it silently looks for the truth ones and
+finds nothing.
+
+`request_cpus = 1` there is deliberate, not an oversight.
+`svj_regression_delphes` is single-threaded by construction — ROOT's `gRandom`
+is not thread-safe, so the binary has no `nWorkers` key at all. Scale it with
+`queue N`, never with `request_cpus`. Its `+JobFlavour` is **uncalibrated**:
+time one shard before trusting an array to it.
+
 ### 7.6 Production validation
 
 ```bash
@@ -512,9 +627,23 @@ helpers.set_svj_scan_path('/eos/user/l/lbojorqu/svj/scans/svj_scan.npz')
 - An array has not been run at full production size. The 64-point / 4-job run
   that validated `scan.sub`'s mechanics used `request_cpus = 8` and
   `microcentury`; `queue 16` with `request_cpus = 16` and `tomorrow` is untried.
-- `tools/build_deps.sh` builds PYTHIA and FastJet only. Anything else the
-  generator comes to depend on needs adding there, and to the `$SVJ_DEPS=local`
-  branch of `setup_env.sh`.
+- **The Delphes path has never been run on lxplus.** It is written and works
+  locally (ROOT 6.34, Delphes 3.5.1), but on lxplus every one of these is
+  unconfirmed: that the LCG view's `root-config` is on `PATH` after sourcing,
+  that `tclsh` exists on the login node, how long the build takes, and whether
+  `libDelphes.so`'s `RUNPATH` into the view's ROOT resolves on a *worker* node.
+  That last one is the one to watch: it is exactly the class of bug §2 warns
+  about, and it will pass on the login node and fail in batch. Run §5 rung 5
+  and then `condor/smoke.sub` before submitting `tsv_delphes.sub`.
+- Delphes is pinned to 3.5.1 in `DELPHES_VER`, and its download URL
+  (`cp3.irmp.ucl.ac.be`) is unverified from lxplus — if it is blocked, fetch the
+  tarball by hand into `$SVJ_WORK` and re-run; `fetch()` skips anything already
+  cached there.
+- `condor/tsv_delphes.sub`'s `+JobFlavour = "workday"` is a guess. Nobody has
+  timed a detector-level shard.
+- ROOT has no local-build fallback, so the pinned LCG view is a hard dependency
+  for the Delphes binaries specifically. When that view is retired, the truth
+  generator survives it and the Delphes ones do not.
 - `merge_svj_validation.py` hardcodes `N_JOBS = 16` and the shard path pattern.
 - The `validation` workflow's `--N3 125` and the `tsv` workflow's overrides are
   hardcoded in `condor/svj_job.sh`; edit them there, not in the `.sub`.

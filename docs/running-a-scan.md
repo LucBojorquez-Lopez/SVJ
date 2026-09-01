@@ -276,22 +276,30 @@ bash merge_svj_tsv.sh 4 --keep-shards
 
 There is no DAGMan file, so the merge is a manual step after the array drains.
 
-**Delphes option.** Like the scan (see "Truth vs. Delphes" above),
-`run_svj_tsv.sh` can generate a Delphes-level TSV instead of the truth-level
-default: edit `BINARY_NAME="svj_regression_delphes"` near the top of the
-script (also drop `-c 16` to `-c 1` in the `#SBATCH` header — the Delphes
-binary is always single-threaded, so extra CPUs sit idle). The output
-filename tag is derived from the binary name so the two streams never
-collide: `svj_regression` → `jets_default(_N).tsv`, `svj_regression_delphes`
-→ `jets_delphes(_N).tsv`. Merge with the matching `--binary` flag:
+**Delphes option.** Like the scan (see "Truth vs. Delphes" above), the TSV
+workflow can produce detector-level shards instead of truth-level ones. Use
+`condor/tsv_delphes.sub`, which is `condor/tsv.sub` with
+`SVJ_BINARY=svj_regression_delphes` added to its `environment` line:
 
 ```bash
-bash merge_svj_tsv.sh 4 --binary svj_regression_delphes
+condor_submit condor/tsv_delphes.sub
+bash merge_svj_tsv.sh 8 --binary svj_regression_delphes
 # -> simulated/tsv/jets_delphes.tsv
 ```
 
+The output tag is derived from the binary name, so the two streams never
+collide — `svj_regression` → `jets_default(_N).tsv`,
+`svj_regression_delphes` → `jets_delphes(_N).tsv` — and the two arrays can run
+concurrently. The `--binary` flag has to be passed to the merge as well:
+without it the merge looks for truth shards and finds nothing.
+
+That submit file requests **one** CPU on purpose. `svj_regression_delphes` is
+single-threaded by construction — ROOT's `gRandom` is not thread-safe, so the
+binary has no `nWorkers` key at all — and scales with `queue N`, never with
+`request_cpus`.
+
 `svj_regression_delphes` never writes a kinematics TSV (unlike
-`svj_regression`, it has no `tsv_kin_file` key at all); `run_svj_tsv.sh`
+`svj_regression`, it has no `tsv_kin_file` key at all); `condor/svj_job.sh`
 skips that override for it, and `merge_svj_tsv.sh` skips the kinematics
 merge step accordingly — no separate flag needed.
 

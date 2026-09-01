@@ -1,5 +1,9 @@
 # Build products
 src/generate_events/svj_regression
+# Same reason as above: a compiled binary bakes in absolute library paths from
+# the machine that built it, so a committed one is useless anywhere else.
+src/generate_events/svj_regression_delphes
+src/generate_events/svj_delphes_test
 
 # Locally built PYTHIA / FastJet, if $SVJ_WORK is placed inside a clone.
 # The default is a sibling of the repo, so this is belt-and-braces.

@@ -89,6 +89,42 @@ else
 fi
 unset _svj_pythia _svj_d
 
+# ── Delphes ──────────────────────────────────────────────────────────────────
+#
+# Optional.  Only src/generate_events/svj_regression_delphes and
+# svj_delphes_test need it; nothing on the Python side imports it.  A missing
+# Delphes therefore degrades to "those two make targets refuse to build"
+# instead of breaking the environment, which is why this block never returns
+# non-zero.
+#
+# Delphes has NO install prefix -- `make` leaves libDelphes.so inside its own
+# source tree and ships no `make install` -- so DELPHES_DIR points at a source
+# tree, not at a prefix like PYTHIA_DIR and FASTJET_DIR do.
+#
+# Globbed rather than pinned, for the same reason as PYTHIA above: bumping
+# DELPHES_VER in tools/build_deps.sh must not silently leave this unset.
+#
+# ROOT is a hard requirement of Delphes and comes from the LCG view sourced
+# above -- there is no local-build fallback for it, and none is wanted: ROOT is
+# far too big to build here against a 2 GB AFS quota.  The Makefile finds it via
+# `root-config` on PATH, which the view provides.
+_svj_delphes=""
+for _svj_d in "$SVJ_WORK"/delphes*/; do
+    [[ -f "$_svj_d/libDelphes.so" ]] && _svj_delphes="${_svj_d%/}"
+done
+
+if [[ -n "$_svj_delphes" ]] && command -v root-config >/dev/null 2>&1; then
+    export DELPHES_DIR="$_svj_delphes"
+    export SVJ_DELPHES=local
+elif [[ -n "$_svj_delphes" ]]; then
+    export DELPHES_DIR="$_svj_delphes"
+    export SVJ_DELPHES=no-root      # tree present, but the view has no ROOT
+else
+    unset DELPHES_DIR
+    export SVJ_DELPHES=none         # run tools/build_deps.sh --delphes
+fi
+unset _svj_delphes _svj_d
+
 # An autoloaded pytest plugin in the view emits CDash <DartMeasurement> XML for
 # every test, burying the summary line in thousands of lines of markup.
 export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1

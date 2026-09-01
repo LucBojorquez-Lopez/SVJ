@@ -16,6 +16,10 @@
 #
 # SVJ_SCAN_CFG overrides the scan config, so one .sub can run either a one-point
 # smoke test (src/run_regression/scan_smoke.cfg) or a production grid.
+#
+# SVJ_BINARY selects the generator for the `tsv` workflow: svj_regression
+# (default, truth level) or svj_regression_delphes (detector level).  Set it in
+# the .sub's `environment` line -- see condor/tsv_delphes.sub.
 
 set -euo pipefail
 
@@ -72,20 +76,48 @@ case "$WORKFLOW" in
     ;;
 
   tsv)
-    BINARY="src/generate_events/svj_regression"
-    [[ -x "$BINARY" ]] || { echo "ERROR: run 'make svj_regression' first" >&2; exit 1; }
+    # The two generators are not interchangeable beyond the name:
+    #
+    #   svj_regression          multi-threaded (nWorkers), writes tsv_file AND
+    #                           tsv_kin_file, honours save_tsv.
+    #   svj_regression_delphes  single-threaded BY CONSTRUCTION -- ROOT's
+    #                           gRandom is not thread-safe, see the .cc header
+    #                           -- and reads only tsv_file.  It has no save_tsv
+    #                           and no tsv_kin_file key, so writing those into
+    #                           its cfg would be silently meaningless.
+    #                           Parallelism comes from more jobs (`queue N`),
+    #                           never from request_cpus.
+    #
+    # Output tags stay distinct so a Delphes run can never overwrite a truth
+    # run's shards.  Same mapping as `merge_svj_tsv.sh --binary`.
+    SVJ_BINARY="${SVJ_BINARY:-svj_regression}"
+    BINARY="src/generate_events/${SVJ_BINARY}"
+    [[ -x "$BINARY" ]] || { echo "ERROR: run 'make ${SVJ_BINARY}' first" >&2; exit 1; }
+
+    if [[ "$SVJ_BINARY" == "svj_regression" ]]; then
+        OUT_TAG="jets_default"
+    else
+        OUT_TAG="jets_${SVJ_BINARY#svj_regression_}"
+    fi
+    echo "    binary:  $BINARY"
+    echo "    output:  simulated/tsv/${OUT_TAG}_${TASK}.tsv"
+
     # readConfig() takes the LAST occurrence of a duplicated key, so appended
     # lines override the base cfg.
     TMP_CFG="${TMPDIR:-/tmp}/svj_tsv_${TASK}.cfg"
-    cat src/generate_events/svj_regression.cfg > "$TMP_CFG"
+    cat "src/generate_events/${SVJ_BINARY}.cfg" > "$TMP_CFG"
     cat >> "$TMP_CFG" <<EOCFG
 
 # per-job overrides — seed = workerID + 1 + seed_offset * nWorkers
 seed_offset  = ${TASK}
-tsv_file     = simulated/tsv/jets_default_${TASK}.tsv
+tsv_file     = simulated/tsv/${OUT_TAG}_${TASK}.tsv
+EOCFG
+    if [[ "$SVJ_BINARY" == "svj_regression" ]]; then
+        cat >> "$TMP_CFG" <<EOCFG
 tsv_kin_file = simulated/tsv/jets_kinematics_${TASK}.tsv
 save_tsv     = 1
 EOCFG
+    fi
     "$BINARY" "$TMP_CFG"
     rm -f "$TMP_CFG"
     ;;

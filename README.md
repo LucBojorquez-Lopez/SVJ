@@ -65,6 +65,11 @@ python src/run_regression/scan_svj.py src/run_regression/scan_regression.cfg
 # → simulated/svj/svj_scan.npz
 ```
 
+There is a second, optional generator that runs the same observables through a
+Delphes detector simulation (`make delphes`). It needs ROOT and Delphes on top
+of the above — see [docs/setup_delphes.md](docs/setup_delphes.md), or
+[docs/lxplus.md](docs/lxplus.md) §2 on lxplus/EOS.
+
 Or launch the interactive GUI:
 
 ```python
@@ -81,20 +86,26 @@ show()
 
 ```
 SVJ/
-├── Makefile                       make svj_regression | check-deps | clean
+├── Makefile                       make svj_regression | delphes | check-deps | clean
 ├── setup_env.sh                   lxplus environment: deps, paths, Condor vars
-├── tools/build_deps.sh            Build PYTHIA + FastJet into $SVJ_WORK
+├── tools/build_deps.sh            Build PYTHIA + FastJet (+ --delphes) into $SVJ_WORK
 ├── merge_svj_tsv.sh               Merge per-job TSV shards after condor/tsv.sub
 ├── merge_svj_validation.py        Merge per-task NPZs after condor/validation.sub
 ├── condor/                        HTCondor submit files (see docs/lxplus.md)
 │   ├── _common.inc                  settings shared by every .sub
 │   ├── smoke.sub                    one-job smoke test — run this first
+│   ├── tsv_delphes.sub              detector-level TSV shards
 │   ├── launch.sh                    AFS-side entry point (see docs/lxplus.md §7.2)
 │   └── svj_job.sh                   shared job wrapper
 ├── src/
 │   ├── generate_events/
 │   │   ├── svj_regression.cc      C++ event generator (PYTHIA8 + FastJet)
-│   │   └── svj_regression.cfg     Default physics + run parameters
+│   │   ├── svj_regression.cfg     Default physics + run parameters
+│   │   ├── svj_observables_common.h  Observable code shared by both generators
+│   │   ├── svj_regression_delphes.cc Detector-level generator (+ ROOT/Delphes)
+│   │   ├── svj_delphes_test.cc    Truth-vs-Delphes diagnostic driver
+│   │   ├── svj_delphes_particles.tcl Delphes detector card
+│   │   └── compare_delphes_truth.py  Truth/Delphes comparison plots
 │   ├── run_regression/
 │   │   ├── scan_svj.py            Main scan script (grid → svj_scan.npz)
 │   │   ├── scan_regression.cfg    Config for scan_svj.py (grid axes, physics params)
@@ -109,7 +120,7 @@ SVJ/
 │   ├── observables.py             Observable / transform / distribution registry
 │   ├── helpers.py                 NPZ interpolation helpers + KLD utilities
 │   └── diagnostics.py             Transform pipeline + validation plots
-├── tests/                         pytest suite (211 tests, no PYTHIA needed)
+├── tests/                         pytest suite (229 tests, no PYTHIA needed)
 ├── docs/                          Extended documentation (see below)
 └── simulated/
     ├── svj/working_example/       DEFAULT scan: 4 axes × 11 observables
@@ -130,6 +141,7 @@ Full reference documentation is in [`docs/`](docs/):
 | Topic | File |
 |-------|------|
 | Installation & build | [docs/setup.md](docs/setup.md) |
+| Detector-level (Delphes) stream | [docs/setup_delphes.md](docs/setup_delphes.md) |
 | Running on CERN lxplus | [docs/lxplus.md](docs/lxplus.md) |
 | Running and configuring scans | [docs/running-a-scan.md](docs/running-a-scan.md) |
 | Adding observables, transforms, distributions | [docs/extending-observables.md](docs/extending-observables.md) |

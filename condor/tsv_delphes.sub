@@ -1,0 +1,42 @@
+# condor/tsv_delphes.sub — batch DETECTOR-level TSV generation, 8 shards.
+#
+#   source setup_env.sh
+#   make delphes                                  # once, after build_deps.sh --delphes
+#   condor_submit condor/tsv_delphes.sub
+#   bash merge_svj_tsv.sh 8 --binary svj_regression_delphes
+#
+# Run condor/smoke.sub FIRST (docs/lxplus.md §7.3) — it validates the shared
+# machinery this file inherits from _common.inc.
+#
+# Truth-level equivalent: condor/tsv.sub.  The two write different files
+# (jets_delphes_N.tsv vs jets_default_N.tsv), so they can run concurrently.
+
+include : condor/_common.inc
+
+arguments = "tsv 8 $(ProcId)"
+
+# Overrides the line in _common.inc — a later assignment wins, and this one has
+# to carry SVJ_REPO too, since it replaces rather than extends it.
+environment = "SVJ_REPO=$(SVJ_REPO_DIR) SVJ_BINARY=svj_regression_delphes"
+
+output = $(SVJ_AFS_DIR)/logs/tsvdel_$(ClusterId)_$(ProcId).out
+error  = $(SVJ_AFS_DIR)/logs/tsvdel_$(ClusterId)_$(ProcId).err
+log    = $(SVJ_AFS_DIR)/logs/tsvdel_$(ClusterId).log
+
+# ONE cpu, deliberately.  svj_regression_delphes is single-threaded by
+# construction — ROOT's gRandom is not thread-safe, so the binary has no
+# nWorkers key at all (see the svj_regression_delphes.cc header).  Extra CPUs
+# would sit idle and only make the job harder to schedule.  Scale by raising
+# `queue N`, not request_cpus.
+request_cpus   = 1
+request_memory = 2 GB
+request_disk   = 4 GB
+
+# UNCALIBRATED.  Delphes costs far more per event than the truth generator, and
+# with one thread a 50 000-event shard (nEvent in svj_regression_delphes.cfg) is
+# much slower than the truth equivalent. Time one shard interactively, or watch
+# the first array, before trusting this flavour; if jobs are being evicted,
+# either raise it to "tomorrow" or cut nEvent and raise `queue`.
++JobFlavour    = "workday"
+
+queue 8
