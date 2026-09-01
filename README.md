@@ -87,6 +87,7 @@ SVJ/
 ├── run_svj_validation.sh          SLURM array job: production validation
 ├── merge_svj_tsv.sh               Merge per-job TSV shards after run_svj_tsv.sh
 ├── merge_svj_validation.py        Merge per-task NPZs after run_svj_validation.sh
+├── condor/                        HTCondor equivalents for lxplus (see docs/lxplus.md)
 ├── src/
 │   ├── generate_events/
 │   │   ├── svj_regression.cc      C++ event generator (PYTHIA8 + FastJet)
@@ -125,6 +126,7 @@ Full reference documentation is in [`docs/`](docs/):
 | Topic | File |
 |-------|------|
 | Installation & build | [docs/setup.md](docs/setup.md) |
+| Running on CERN lxplus | [docs/lxplus.md](docs/lxplus.md) |
 | Running and configuring scans | [docs/running-a-scan.md](docs/running-a-scan.md) |
 | Adding observables, transforms, distributions | [docs/extending-observables.md](docs/extending-observables.md) |
 | Diagnostic plots | [docs/diagnostics.md](docs/diagnostics.md) |

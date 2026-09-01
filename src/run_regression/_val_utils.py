@@ -7,6 +7,7 @@ Not intended to be called directly.
 
 import os
 import sys
+import tempfile
 import json
 import subprocess
 import numpy as np
@@ -196,7 +197,7 @@ def run_pythia(full_params, n_events, seed_offset, task_tag):
     physics params but different seed_offsets produce statistically
     independent event samples (seed = 1 + seed_offset for nWorkers=1).
 
-    task_tag is a unique string used to name the /tmp files (avoids
+    task_tag is a unique string used to name the scratch files (avoids
     collisions between concurrent workers).
 
     Returns
@@ -204,13 +205,16 @@ def run_pythia(full_params, n_events, seed_offset, task_tag):
     (data, col_map) as from observables.load_tsv
 
     Raises RuntimeError on binary failure or missing output.
-    Cleans up /tmp files in all cases.
+    Cleans up scratch files in all cases.
     """
     from observables import load_tsv
 
-    _uid = os.environ.get('SLURM_ARRAY_TASK_ID') or str(os.getpid())
-    cfg_path = f'/tmp/val_{_uid}_{task_tag}.cfg'
-    tsv_path = f'/tmp/val_{_uid}_{task_tag}.tsv'
+    # See the note in scan_svj._worker: gettempdir() honours $TMPDIR so batch
+    # jobs write to job-private scratch rather than a shared worker-node /tmp.
+    _uid     = os.environ.get('SLURM_ARRAY_TASK_ID') or str(os.getpid())
+    _scratch = tempfile.gettempdir()
+    cfg_path = os.path.join(_scratch, f'val_{_uid}_{task_tag}.cfg')
+    tsv_path = os.path.join(_scratch, f'val_{_uid}_{task_tag}.tsv')
 
     try:
         with open(cfg_path, 'w') as fh:

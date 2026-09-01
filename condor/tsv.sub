@@ -1,0 +1,27 @@
+# condor/tsv.sub — batch TSV generation, 4 independent shards
+#
+#   condor_submit condor/tsv.sub
+#   bash merge_svj_tsv.sh 4            # after all done
+#
+# Each shard gets a distinct seed_offset, so PYTHIA seeds never overlap.
+# Total events = queue N x nEvent (from svj_regression.cfg).
+# Set request_cpus to nWorkers in svj_regression.cfg.
+# Untested on lxplus — smoke-test per docs/lxplus.md §7.1.
+
+universe                = vanilla
+executable              = condor/svj_job.sh
+arguments               = "tsv 4 $(ProcId)"
+
+output                  = logs/tsv_$(ClusterId)_$(ProcId).out
+error                   = logs/tsv_$(ClusterId)_$(ProcId).err
+log                     = logs/tsv_$(ClusterId).log
+
+request_cpus            = 16
+request_memory          = 2 GB
+request_disk            = 8 GB
++JobFlavour             = "longlunch"
+
+should_transfer_files   = NO
+getenv                  = True
+
+queue 4

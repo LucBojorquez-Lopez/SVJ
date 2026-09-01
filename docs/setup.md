@@ -1,7 +1,8 @@
 # Setup
 
-This walks through a **fresh clone to a working build**, on a generic Linux
-machine and on CERN lxplus. Nothing here assumes a previous checkout.
+This walks through a **fresh clone to a working build** on a generic Linux
+machine. Nothing here assumes a previous checkout. For CERN lxplus
+specifically — AFS quota, LCG views, HTCondor — see [lxplus.md](lxplus.md).
 
 ## Prerequisites
 
@@ -26,17 +27,24 @@ git clone https://github.com/LucBojorquez-Lopez/SVJ.git
 cd SVJ
 ```
 
-The working tree is ~35 MB, but **the clone is ~305 MB**: early history
-contains several revisions of multi-tens-of-MB raw TSVs (~570 MB of blob
-content, since compacted into the pack). Those paths are gitignored now, so
-the repository will not keep growing this way, but the existing history still
-carries them. Budget accordingly on quota-limited filesystems, or use
-`git clone --depth 1` when you only need a working copy.
+A full clone is **~97 MB**: a 35 MB working tree plus ~62 MB of history.
+(Raw TSVs were purged from history in Sept 2026 and are now gitignored, so the
+repository will not grow that way again.) Use `git clone --depth 1` if you only
+want a working copy and no history.
 
-The checkout includes the default scan
-(`simulated/svj/working_example/`, 7.5 MB) and a larger 6-axis scan
-(`simulated/svj/svj_scan.npz`, 25 MB), so the API and GUI work immediately —
-no simulation required.
+**The scan NPZs are committed**, so the API, GUI and validation plots work
+immediately after cloning — no simulation and no C++ build required:
+
+| Path | Size | |
+|------|------|--|
+| `simulated/svj/working_example/svj_scan.npz` | 6.7 MB | the default scan |
+| `simulated/svj/working_example/validation_production.npz` | 755 KB | its validation |
+| `simulated/svj/svj_scan.npz` | 25 MB | larger 6-axis scan |
+| `simulated/svj/validation_production.npz` | 1.1 MB | its validation |
+| `simulated/v1/regression_scan.npz` | 515 KB | archived v1 grid (KLD utilities) |
+
+You only need §2, §3 and §5 below to **generate new events**. To work with the
+shipped scans, go straight to §4.
 
 ### Directory layout for the C++ build
 
@@ -50,7 +58,7 @@ repository:
 └── SVJ/           # this repo  <- you are here
 ```
 
-This is only the default. Both locations are overridable — see §4.
+This is only the default. Both locations are overridable — see §5.
 
 ---
 
@@ -164,48 +172,14 @@ MB and are reproducible from the binary plus a cfg.
 
 ## Running on CERN lxplus
 
-The build works on lxplus, with three differences from the layout above.
+lxplus needs a different filesystem layout (AFS quota), a compiler and Python
+from an LCG view, and HTCondor rather than SLURM. That is covered in its own
+guide, including exactly what ships in the clone versus what must be rebuilt:
 
-**Build PYTHIA and FastJet somewhere with space.** AFS home is quota-limited
-(~10 GB) and the two builds together are several GB. Use your work area or
-EOS:
+**→ [lxplus.md](lxplus.md)**
 
-```bash
-export SVJ_DEPS=/afs/cern.ch/work/${USER:0:1}/${USER}/svj-deps
-mkdir -p "$SVJ_DEPS" && cd "$SVJ_DEPS"
-# ... then follow §2 and §3 inside $SVJ_DEPS ...
-```
-
-**Point the Makefile at them.** Since they are no longer siblings of the repo:
-
-```bash
-cd /path/to/SVJ
-make svj_regression PYTHIA_DIR="$SVJ_DEPS/pythia8317" \
-                    FASTJET_DIR="$SVJ_DEPS/fastjet3"
-```
-
-Persist it in your shell profile so plain `make svj_regression` keeps working:
-
-```bash
-export PYTHIA_DIR="$SVJ_DEPS/pythia8317"
-export FASTJET_DIR="$SVJ_DEPS/fastjet3"
-```
-
-**Use a recent compiler and Python via LCG.** The system g++ on lxplus may
-predate the C++17 support this project needs. Source an LCG view first — pick
-one matching the current lxplus architecture rather than copying the tag
-below verbatim (`ls /cvmfs/sft.cern.ch/lcg/views/` to see what is available):
-
-```bash
-source /cvmfs/sft.cern.ch/lcg/views/LCG_105/x86_64-el9-gcc13-opt/setup.sh
-g++ --version        # expect >= 9
-```
-
-Create the venv *after* sourcing the LCG view so it inherits that Python, and
-re-source the view in every batch job that activates the venv.
-
-> **Batch jobs.** The `run_svj_*.sh` scripts at the repository root are SLURM
-> array jobs written for a specific Harvard partition
-> (`-p arguelles_delgado`). They will not run under HTCondor as-is. See
-> [running-a-scan.md](running-a-scan.md) for what each one does and which
-> parameters need translating.
+The short version: the scan NPZs are committed, so the API, GUI and validation
+plots work as soon as the clone finishes. You need PYTHIA, FastJet and the
+`svj_regression` build only to generate *new* events. Point the Makefile at
+your own installs with `PYTHIA_DIR` / `FASTJET_DIR` (§5 above), and use the
+submit files in [`condor/`](../condor/) instead of the SLURM scripts.

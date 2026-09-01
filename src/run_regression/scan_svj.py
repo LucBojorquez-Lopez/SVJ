@@ -50,6 +50,7 @@ Merge mode (for SLURM array jobs):
 import subprocess
 import sys
 import os
+import tempfile
 import time
 import json
 import itertools
@@ -273,8 +274,13 @@ def _worker(args):
     (task_id, grid_indices, point_params,
      nEvent, nWorkers_inner, obs_selection, save_raw) = args
 
-    temp_cfg = f'/tmp/svj_scan_{task_id}.cfg'
-    temp_tsv = f'/tmp/svj_scan_{task_id}.tsv'
+    # tempfile.gettempdir() honours $TMPDIR.  Batch systems point that at
+    # job-private scratch (HTCondor does so on lxplus), whereas worker-node
+    # /tmp is often small and shared between jobs — and each of these TSVs
+    # holds nEvent events.  Falls back to /tmp when $TMPDIR is unset.
+    _scratch = tempfile.gettempdir()
+    temp_cfg = os.path.join(_scratch, f'svj_scan_{task_id}.cfg')
+    temp_tsv = os.path.join(_scratch, f'svj_scan_{task_id}.tsv')
     fail     = (grid_indices, None, None, None, None, 0)
 
     write_point_cfg(temp_cfg, point_params, nEvent, nWorkers_inner, temp_tsv)

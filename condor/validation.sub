@@ -1,0 +1,27 @@
+# condor/validation.sub — production validation, 16 x 125 = 2000 points
+#
+#   condor_submit condor/validation.sub
+#   python merge_svj_validation.py     # after all done (edit N_JOBS if changed)
+#
+# Each validation point costs THREE PYTHIA runs — by far the most expensive
+# workflow.  Measure one point (N3=2, queue 1) before scaling.
+# N3 per task is set in condor/svj_job.sh.
+# Untested on lxplus — smoke-test per docs/lxplus.md §7.1.
+
+universe                = vanilla
+executable              = condor/svj_job.sh
+arguments               = "validation 16 $(ProcId)"
+
+output                  = logs/val_$(ClusterId)_$(ProcId).out
+error                   = logs/val_$(ClusterId)_$(ProcId).err
+log                     = logs/val_$(ClusterId).log
+
+request_cpus            = 16
+request_memory          = 4 GB
+request_disk            = 8 GB
++JobFlavour             = "tomorrow"
+
+should_transfer_files   = NO
+getenv                  = True
+
+queue 16

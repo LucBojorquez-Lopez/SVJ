@@ -1,0 +1,26 @@
+# condor/scan.sub — parameter scan, 16 parallel slices
+#
+#   condor_submit condor/scan.sub
+#   python src/run_regression/scan_svj.py --merge --n-jobs 16   # after all done
+#
+# N_JOBS must agree in three places: the `arguments` line, `queue`, and the
+# --merge call above.  Set n_outer_workers in scan_regression.cfg to
+# request_cpus.  Untested on lxplus — smoke-test per docs/lxplus.md §7.1.
+
+universe                = vanilla
+executable              = condor/svj_job.sh
+arguments               = "scan 16 $(ProcId)"
+
+output                  = logs/scan_$(ClusterId)_$(ProcId).out
+error                   = logs/scan_$(ClusterId)_$(ProcId).err
+log                     = logs/scan_$(ClusterId).log
+
+request_cpus            = 16
+request_memory          = 4 GB
+request_disk            = 4 GB
++JobFlavour             = "tomorrow"
+
+should_transfer_files   = NO
+getenv                  = True
+
+queue 16
