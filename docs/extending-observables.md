@@ -201,3 +201,39 @@ y_std, params = fit_observable_col(x_col, pipeline, dist_name,
 **Disabling the mixture.** To revert an observable to purely continuous
 behaviour, remove the `point_mass` key (or set it to `None`). No other code
 changes are needed.
+
+## Atoms: why an observable can be unfittable
+
+`hemiMass2` carried `default_include: False` for what looked like a preference.
+It was not: with `pipeline: [('boxcox', {})]` and no `point_mass`, the fit dies
+with
+
+```
+ValueError: Data must be positive.
+```
+
+because **`hemiMass2` is exactly 0 in 35.6% of events on average, ranging 6.7%
+to 65.0% across the production grid** — one hemisphere frequently carries no
+reconstructed jet mass at all. (`hemiMass1` is never 0.) Any observable
+selection containing it failed entirely, and the blanket `except` in
+`_refit_worker` turned that into a silent per-point FAIL.
+
+Fixed by giving it the same treatment `maxMuPt` already had — an atom at zero
+plus boxcox+gennorm on the positive part:
+
+```python
+'point_mass': {'value': 0.0, 'tol': 1e-10, 'symmetric': False, 'min_p0': 0.001},
+```
+
+**The lesson for new observables:** if a quantity can be exactly zero (or hit
+any boundary) and its pipeline contains `boxcox`, it needs a `point_mass` or it
+will not fit. Others in this position, already handled: `maxMuPt`, `maxElePt`,
+`fInv` (atom at 0), `RT` (atom at 1), `dPhiMETclose` (symmetric atom at +-pi).
+`ptBal` is documented as "can be 0" and has no `point_mass` — it is
+`default_include: False`, and would need one before use.
+
+**The atom fraction is physics, not a nuisance.** p0 for `hemiMass2` rises
+monotonically with `rinv_pion` — 20.4%, 36.9%, 52.7%, 65.0% at indices 0/2/4/6 —
+because a larger invisible fraction more often leaves a hemisphere with no
+visible mass. Absorbing it into a point mass keeps the fit working, but that
+parameter carries signal and is worth modelling rather than discarding.

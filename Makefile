@@ -52,16 +52,32 @@ GEN    := $(REPO_ROOT)/src/generate_events
 TARGET := $(GEN)/svj_regression
 SOURCE := $(GEN)/svj_regression.cc
 
+# Signal normalisation tool.  Measures sigma x BR for HV Z' production as a
+# function of mZ' -- the numbers behind signal/xsec.json and docs/normalisation.md.
+# Needs PYTHIA only: it switches the parton and hadron levels off, because the
+# cross section is fixed at process level and everything after it is slow.
+XSEC_TARGET := $(GEN)/svj_xsec
+XSEC_SOURCE := $(GEN)/svj_xsec.cc
+
 # Shared observable code, #included by svj_regression.cc and by the Delphes
 # generator.  Listed as a prerequisite so editing it triggers a rebuild --
 # without this, a change to an observable silently leaves a stale binary.
 COMMON_H := $(GEN)/svj_observables_common.h
 
-.PHONY: svj_regression clean check-deps
+.PHONY: svj_regression svj_xsec clean check-deps check-pythia
 svj_regression: $(TARGET)
+svj_xsec: $(XSEC_TARGET)
 
 $(TARGET): $(SOURCE) $(COMMON_H) | check-deps
 	$(CXX) $< -o $@ $(CXX_COMMON) $(FASTJET_FLAGS) -lstdc++fs
+
+$(XSEC_TARGET): $(XSEC_SOURCE) | check-pythia
+	$(CXX) $< -o $@ $(CXX_COMMON)
+
+check-pythia:
+	@test -f "$(PYTHIA_ABS)/lib/libpythia8.so" || { \
+	    echo "ERROR: libpythia8.so not found under PYTHIA_DIR=$(PYTHIA_ABS)"; \
+	    exit 1; }
 
 check-deps:
 	@test -f "$(PYTHIA_ABS)/lib/libpythia8.so" || { \
@@ -105,6 +121,33 @@ endif
 
 # -lEG is NOT included in `root-config --libs`, but Delphes needs it for
 # TDatabasePDG.  Delphes' own makefile adds it for the same reason.
+# The compiler ROOT was built with, and that compiler's libstdc++.
+#
+# On lxplus, ROOT comes from an LCG view built with the view's gcc 13, whose
+# libstdc++ exports GLIBCXX_3.4.30/.31.  The EL9 system gcc 11 does not have
+# them.  That matters because when PYTHIA came from a source build -- the
+# normal case here -- examples/Makefile.inc (-included above) sets
+# CXX=/usr/bin/g++.  For svj_regression that is exactly right: the binary then
+# needs nothing from CVMFS at runtime.  For anything linking ROOT it is wrong,
+# and it fails at link time with
+#
+#     libGraf.so: undefined reference to ...@GLIBCXX_3.4.31
+#
+# on libGraf/libRIO and on libDelphes.so itself.  So the ROOT-dependent targets
+# are linked with the compiler root-config reports, falling back to $(CXX) when
+# ROOT names none.  A command-line CXX=... still wins, as it does everywhere.
+#
+# One consequence worth knowing: unlike svj_regression, these binaries DO
+# depend on the view at runtime (ROOT, and its libstdc++).  Sourcing
+# setup_env.sh is therefore mandatory before running them -- condor/svj_job.sh
+# already does it.  DELPHES_STDCXX_RPATH bakes in the libstdc++ directory so
+# the binary at least resolves that much on its own.
+#
+# Kept on ONE line, for the reason given above ROOT_CONFIG: a backslash-newline
+# inside $(shell ...) reaches the shell as backslash-space.
+DELPHES_CXX = $(firstword $(shell $(ROOT_CONFIG) --cxx 2>/dev/null) $(CXX))
+DELPHES_STDCXX_RPATH = $(shell d=$$($(DELPHES_CXX) -print-file-name=libstdc++.so 2>/dev/null) && test -n "$$d" && echo "-Wl,-rpath,$$(cd $$(dirname $$d) && pwd -P)")
+
 ROOT_FLAGS    = $(shell $(ROOT_CONFIG) --cflags --libs) -lEG
 DELPHES_FLAGS = -I$(DELPHES_ABS) -I$(DELPHES_ABS)/external \
                 -L$(DELPHES_ABS) -Wl,-rpath,$(DELPHES_ABS) -lDelphes
@@ -120,10 +163,10 @@ delphes: $(DELPHES_GEN) $(DELPHES_TEST)
 # svj_regression_delphes.cc shares the observable code; svj_delphes_test.cc
 # does not include it, so it is not a prerequisite there.
 $(DELPHES_GEN): $(GEN)/svj_regression_delphes.cc $(COMMON_H) | check-deps check-delphes-deps
-	$(CXX) $< -o $@ $(CXX_COMMON) $(FASTJET_FLAGS) $(DELPHES_FLAGS) $(ROOT_FLAGS) -lstdc++fs
+	$(DELPHES_CXX) $< -o $@ $(CXX_COMMON) $(FASTJET_FLAGS) $(DELPHES_FLAGS) $(ROOT_FLAGS) $(DELPHES_STDCXX_RPATH) -lstdc++fs
 
 $(DELPHES_TEST): $(GEN)/svj_delphes_test.cc | check-deps check-delphes-deps
-	$(CXX) $< -o $@ $(CXX_COMMON) $(FASTJET_FLAGS) $(DELPHES_FLAGS) $(ROOT_FLAGS) -lstdc++fs
+	$(DELPHES_CXX) $< -o $@ $(CXX_COMMON) $(FASTJET_FLAGS) $(DELPHES_FLAGS) $(ROOT_FLAGS) $(DELPHES_STDCXX_RPATH) -lstdc++fs
 
 check-delphes-deps:
 	@test -f "$(DELPHES_ABS)/libDelphes.so" || { \

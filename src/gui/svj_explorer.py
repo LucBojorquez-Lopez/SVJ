@@ -43,6 +43,7 @@ _HERE     = Path(__file__).resolve().parent
 _REPO     = _HERE.parent.parent
 sys.path.insert(0, str(_HERE.parent))
 import helpers
+import normalisation
 from observables import OBSERVABLES, DEFAULT_SCAN, event_valid_mask, load_tsv
 
 _BINARY      = str(_HERE.parent / 'generate_events' / 'svj_regression')
@@ -164,6 +165,72 @@ _IDX_MASS1 = _OBS_NAMES.index('hemiMass1')  if 'hemiMass1'  in _OBS_NAMES else N
 _IDX_MASS2 = _OBS_NAMES.index('hemiMass2')  if 'hemiMass2'  in _OBS_NAMES else None
 _IDX_MRAT  = _OBS_NAMES.index('mass2/mass1') if 'mass2/mass1' in _OBS_NAMES else None
 
+# Base-column indices for the physical constraints applied to model draws.
+# Recomputed by show() when a different scan is loaded (see _rebuild_constraints).
+_FOLD_BASE_IDX = []
+_MASS1_BASE = None
+_MASS2_BASE = None
+
+
+# ── Physical constraints on model draws ─────────────────────────────────────
+#
+# The interpolator fits each observable's marginal separately and joins them with
+# a Gaussian copula, so it knows nothing about constraints the generator enforces
+# exactly.  Two such constraints exist, and model draws violate both.  In each
+# case the fix is the same: project the draw back onto the surface the true data
+# occupies, rather than discarding it -- discarding would throw away draws the
+# model considered likely and bias the acceptance.
+#
+#  1. SIGN.  dPhiMETclose/dPhiMETfar are stored signed in (-pi, pi], but the
+#     fitting pipeline takes abs() as its first step and labels them |.|.  Left
+#     unfolded, a cut of "> 0.4" silently discards the negative half instead of
+#     selecting an angle -- it halved the background while leaving the QCD
+#     fraction at 99%.  See docs/normalisation.md M9.
+#  2. MASS ORDERING.  svj_observables_common.h:280 swaps the two hemisphere
+#     masses so hemiMass1 >= hemiMass2 always holds in simulated data.  The
+#     copula can draw the pair the other way round, producing events that cannot
+#     exist in the training set.
+#
+# Both are applied to BASE columns before _add_derived(), so derived ratios such
+# as mass2/mass1 are computed from the corrected values rather than the raw ones.
+
+
+def _rebuild_constraints():
+    """Recompute base-column constraint indices from the loaded scan."""
+    global _FOLD_BASE_IDX, _MASS1_BASE, _MASS2_BASE
+    _FOLD_BASE_IDX = [
+        i for i, name in enumerate(_BASE_OBS)
+        if (OBSERVABLES.get(name, {}).get('pipeline') or [(None,)])[0][0] == 'abs_value']
+    _MASS1_BASE = _BASE_OBS.index('hemiMass1') if 'hemiMass1' in _BASE_OBS else None
+    _MASS2_BASE = _BASE_OBS.index('hemiMass2') if 'hemiMass2' in _BASE_OBS else None
+
+
+def _physicalise(X):
+    """
+    Enforce the generator's constraints on an (N, n_base) array, in place.
+
+    Safe to call on true and background data too: their masses are already
+    ordered and the fold is idempotent, so it is a no-op there apart from
+    folding the signed angles, which is exactly what is wanted.
+    """
+    if _FOLD_BASE_IDX:
+        X[:, _FOLD_BASE_IDX] = np.abs(X[:, _FOLD_BASE_IDX])
+    if _MASS1_BASE is not None and _MASS2_BASE is not None:
+        m1 = X[:, _MASS1_BASE].copy()
+        m2 = X[:, _MASS2_BASE]
+        swap = m1 < m2
+        if swap.any():
+            X[swap, _MASS1_BASE] = m2[swap]
+            X[swap, _MASS2_BASE] = m1[swap]
+    return X
+
+
+def _prepare(X):
+    """Physicalise base columns, then append derived ones."""
+    return _add_derived(_physicalise(np.asarray(X, dtype=np.float64)))
+
+
+
 
 # ── Config helpers ────────────────────────────────────────────────────────────
 
@@ -253,22 +320,37 @@ def _add_derived(X):
 # ── Histogram with multinomial error band ────────────────────────────────────
 
 def _plot_hist_with_band(ax, data, bins, range_, color,
-                         alpha_line=0.85, alpha_band=0.2, label=None):
+                         alpha_line=0.85, alpha_band=0.2, label=None,
+                         weights=None, linestyle='-'):
     """
-    Draw a density step histogram with a ±1σ multinomial error band.
+    Draw a density step histogram with a ±1σ error band.
 
-    σ_density = sqrt(p_i * (1 - p_i) / N) / Δbin_i,  p_i = count_i / N.
-    The band is rendered as a fill_between in step form, clipped below at 0.
+    Unweighted: σ_density = sqrt(p_i (1 - p_i) / N) / Δbin_i, p_i = count_i / N.
+    Weighted (the background, whose per-sample weights span nine orders of
+    magnitude): the band is sqrt(Σ w²) per bin over the total weight, which is
+    the right MC error for weighted events and is emphatically not sqrt(N) —
+    a bin holding one heavy event must not look precise.
     """
-    counts, edges = np.histogram(data, bins=bins, range=range_)
-    N       = max(counts.sum(), 1)
-    widths  = np.diff(edges)
-    density = counts / (N * widths)
-    p       = counts / N
-    err     = np.sqrt(np.maximum(p * (1.0 - p), 0.0) / N) / widths
+    if weights is None:
+        counts, edges = np.histogram(data, bins=bins, range=range_)
+        N       = max(counts.sum(), 1)
+        widths  = np.diff(edges)
+        density = counts / (N * widths)
+        p       = counts / N
+        err     = np.sqrt(np.maximum(p * (1.0 - p), 0.0) / N) / widths
+    else:
+        counts, edges = np.histogram(data, bins=bins, range=range_,
+                                     weights=weights)
+        sq, _   = np.histogram(data, bins=edges, range=range_,
+                               weights=weights ** 2)
+        N       = max(counts.sum(), 1e-300)
+        widths  = np.diff(edges)
+        density = counts / (N * widths)
+        err     = np.sqrt(np.maximum(sq, 0.0)) / (N * widths)
 
     ax.hist(data, bins=edges, range=range_, color=color, alpha=alpha_line,
-            density=True, histtype='step', linewidth=1.5, label=label)
+            density=True, histtype='step', linewidth=1.5, label=label,
+            weights=weights, linestyle=linestyle)
 
     # Build step-form x/y arrays so fill_between matches the histogram outline.
     x_step = np.concatenate([[edges[0]], np.repeat(edges[1:-1], 2), [edges[-1]]])
@@ -286,7 +368,7 @@ def _load_true_data():
         raise ValueError(f"Expected 2-D TSV, got shape {data.shape}.")
     X = np.column_stack([data[:, col_map[OBSERVABLES[n]['col']]] for n in _BASE_OBS])
     finite_mask = np.all(np.isfinite(X), axis=1)
-    return _add_derived(X[finite_mask])
+    return _prepare(X[finite_mask])
 
 
 # ── Model sampling ────────────────────────────────────────────────────────────
@@ -295,7 +377,7 @@ def _sample_model(scan_point, n_samples, rng):
     """Draw n_samples from the interpolated SVJ model at scan_point (dict)."""
     result = helpers.interpolate_svj_params(scan_point)
     X      = helpers.sample_svj_new(*result, n_samples=n_samples, rng=rng)
-    return _add_derived(X)
+    return _prepare(X)
 
 
 # ── Fixed axis ranges (computed once at import) ───────────────────────────────
@@ -332,7 +414,44 @@ def _compute_fixed_ranges(n_corner_samples=3_000):
     return ranges
 
 
+_rebuild_constraints()
 _FIXED_RANGES = _compute_fixed_ranges()
+
+
+# ── Background (static: it does not depend on the physics sliders) ───────────
+
+_BKG = {'X': None, 'w': None, 'sid': None, 'names': None, 'error': None}
+
+
+def _load_background_once():
+    """
+    Load and align the weighted background, once per session.
+
+    Returns (X, w_fb) with X in _OBS_NAMES order and folded like the model, or
+    (None, None) with _BKG['error'] set if the cache is missing.  The background
+    is static -- no physics slider changes it -- so this is cached and the cut
+    mask is all that is re-applied per redraw.
+    """
+    if _BKG['X'] is not None or _BKG['error'] is not None:
+        return _BKG['X'], _BKG['w']
+    try:
+        Xr, w, _sid, snames, obs = normalisation.load_background()
+    except Exception as exc:
+        _BKG['error'] = str(exc)
+        return None, None
+    colmap = {n: i for i, n in enumerate(obs)}
+    try:
+        cols = [colmap[OBSERVABLES[n]['col']] for n in _BASE_OBS]
+    except KeyError as exc:
+        _BKG['error'] = f'background cache lacks observable {exc}'
+        return None, None
+    X = _prepare(Xr[:, cols])
+    keep = np.all(np.isfinite(X), axis=1)
+    _BKG['X'] = X[keep]
+    _BKG['w'] = np.asarray(w, dtype=np.float64)[keep]
+    _BKG['sid'] = np.asarray(_sid)[keep]
+    _BKG['names'] = snames
+    return _BKG['X'], _BKG['w']
 
 
 # ── Main entry point ──────────────────────────────────────────────────────────
@@ -368,6 +487,9 @@ def show(n_samples=10_000, scan_dir=None):
         _IDX_MASS1 = _OBS_NAMES.index('hemiMass1')   if 'hemiMass1'   in _OBS_NAMES else None
         _IDX_MASS2 = _OBS_NAMES.index('hemiMass2')   if 'hemiMass2'   in _OBS_NAMES else None
         _IDX_MRAT  = _OBS_NAMES.index('mass2/mass1') if 'mass2/mass1' in _OBS_NAMES else None
+        _rebuild_constraints()
+        _BKG.update({'X': None, 'w': None, 'sid': None, 'names': None,
+                     'error': None})
         _FIXED_RANGES = _compute_fixed_ranges()
 
     display(HTML("""
@@ -411,6 +533,7 @@ def show(n_samples=10_000, scan_dir=None):
         'ax_joint':      None,
         'ax_joint_est':  None,
         'ax_joint_true': None,
+        'b_mask':        None,
     }
 
     # ── Dynamic parameter sliders ─────────────────────────────────────────────
@@ -476,8 +599,33 @@ def show(n_samples=10_000, scan_dir=None):
 
     w_info = widgets.HTML(value='')
 
+    # ── Rate & significance ───────────────────────────────────────────────────
+    # g_q and L affect ONLY the S/sqrt(B) counter -- neither changes any plotted
+    # distribution (the background panel is a weighted density, so it does not
+    # rescale with luminosity either).  They are therefore grouped here rather
+    # than among the physics sliders.
+    _XS      = normalisation.load_signal_xsec()
+    _GQ_REF  = _XS['reference']['g_q']
+    _GQ_CEIL = _XS['reference']['g_q_max_consistent']
+
+    w_gq = widgets.FloatLogSlider(
+        value=_GQ_CEIL, base=10,
+        min=float(np.log10(_GQ_REF)), max=float(np.log10(0.25)), step=0.005,
+        description='g_q:', readout_format='.4f', continuous_update=False,
+        style={'description_width': '80px'},
+        layout=widgets.Layout(width='330px'))
+
+    w_lumi = widgets.FloatLogSlider(
+        value=140.0, base=10, min=0.0, max=float(np.log10(3000.0)), step=0.01,
+        description='L [fb⁻¹]:', readout_format='.0f', continuous_update=False,
+        style={'description_width': '80px'},
+        layout=widgets.Layout(width='330px'))
+
+    w_sig = widgets.HTML(value='')
+
     _all_widgets = (list(sliders.values()) +
-                    [w_xfeat, w_yfeat, w_axes, w_norm, w_nsamples, w_nvalidate, w_validate])
+                    [w_xfeat, w_yfeat, w_axes, w_norm, w_nsamples, w_nvalidate,
+                     w_validate, w_gq, w_lumi])
 
     # ── Cut widgets ───────────────────────────────────────────────────────────
     def _make_cut_slider(i):
@@ -499,16 +647,22 @@ def show(n_samples=10_000, scan_dir=None):
     _all_widgets += w_cuts + [w_reset_cuts]
 
     # ── Figure ────────────────────────────────────────────────────────────────
-    fig = plt.figure(figsize=(12, 8))
+    fig = plt.figure(figsize=(12, 12))
     fig.canvas.header_visible = False
-    gs  = gridspec.GridSpec(2, 3, figure=fig,
+    gs  = gridspec.GridSpec(3, 3, figure=fig,
                             width_ratios=[1, 1, 0.06],
+                            height_ratios=[0.8, 1, 1],
                             hspace=0.45, wspace=0.35)
     ax_xmarg = fig.add_subplot(gs[0, 0])
     ax_ymarg = fig.add_subplot(gs[0, 1])
     # gs[0, 2] is intentionally left empty — aligns with the colorbar column below
     _state['ax_joint'] = fig.add_subplot(gs[1, :2])
     ax_cbar = fig.add_subplot(gs[1, 2])
+    # Third row: the Standard-Model background.  Static — no physics slider
+    # changes it — so it is drawn from the cached weighted sample every redraw
+    # with only the cut mask re-applied.
+    ax_bkg    = fig.add_subplot(gs[2, :2])
+    ax_cbar_b = fig.add_subplot(gs[2, 2])
 
     _rng = np.random.default_rng()
 
@@ -548,11 +702,10 @@ def show(n_samples=10_000, scan_dir=None):
         ax_xmarg.cla()
         ax_ymarg.cla()
 
-        mass_idxs = {i for i in (_IDX_MASS1, _IDX_MASS2, _IDX_MRAT) if i is not None}
-        if xi in mass_idxs or yi in mass_idxs:
-            if _IDX_MASS1 is not None and _IDX_MASS2 is not None:
-                X = X[X[:, _IDX_MASS1] >= X[:, _IDX_MASS2]]
-
+        # The hemisphere-mass ordering that used to be repaired here, and only
+        # when a mass feature happened to be plotted, is now enforced for every
+        # draw in _physicalise() -- by swapping rather than discarding.  Doing it
+        # conditionally made the signal acceptance depend on the plot axes.
         n_model_total = len(X)
         X = X[_cut_mask(X)]
         n_model_pass  = len(X)
@@ -564,6 +717,18 @@ def show(n_samples=10_000, scan_dir=None):
 
         if len(xdata) < 20:
             w_info.value += '  <span style="color:orange"> — too few finite values to plot</span>'
+            # Returning here would leave the background panel and the counter
+            # showing the PREVIOUS point's numbers, which is worse than showing
+            # nothing: the significance would look valid while belonging to a
+            # different slider position.  Clear both instead.
+            _state['b_mask'] = None
+            ax_bkg.cla()
+            ax_bkg.set_title('Standard-Model background', fontsize=10)
+            ax_cbar_b.cla()
+            ax_cbar_b.axis('off')
+            w_sig.value = ('<i style="color:#888; font-family:Times New Roman,serif">'
+                           'no significance: too few model events to plot</i>')
+            fig.canvas.draw_idle()
             return
 
         if use_fixed:
@@ -605,6 +770,28 @@ def show(n_samples=10_000, scan_dir=None):
                                  color='crimson', label='True')
             _plot_hist_with_band(ax_ymarg, ty, bins=b2, range_=yrng,
                                  color='crimson', label='True')
+
+        # ── Background overlay (weighted; one summed SM density) ─────────────
+        Xb, wb = _load_background_once()
+        bx = by = wb_cut = None
+        b_mask_full = None
+        if Xb is not None:
+            b_mask_full = _cut_mask(Xb)
+            bxr, byr = Xb[:, xi], Xb[:, yi]
+            bfin = np.isfinite(bxr) & np.isfinite(byr) & b_mask_full
+            if bfin.sum() >= 20:
+                bx, by, wb_cut = bxr[bfin], byr[bfin], wb[bfin]
+
+        if bx is not None:
+            _plot_hist_with_band(ax_xmarg, bx, bins=b2, range_=xrng,
+                                 color='seagreen', label='Background',
+                                 weights=wb_cut, alpha_band=0.15,
+                                 linestyle='--')
+            _plot_hist_with_band(ax_ymarg, by, bins=b2, range_=yrng,
+                                 color='seagreen', label='Background',
+                                 weights=wb_cut, alpha_band=0.15,
+                                 linestyle='--')
+        if tx is not None or bx is not None:
             ax_xmarg.legend(framealpha=0.5)
             ax_ymarg.legend(framealpha=0.5)
 
@@ -668,7 +855,148 @@ def show(n_samples=10_000, scan_dir=None):
             cut_html += '</span>'
             w_info.value += cut_html
 
+        # ── Background joint (third row): weighted density ───────────────────
+        ax_bkg.cla()
+        if bx is not None:
+            # density=True with weights normalises by total weight x bin area,
+            # so this is a shape directly comparable to the panels above.
+            # Weighting is not optional: the per-sample weights span nine orders
+            # of magnitude, and an unweighted histogram would show whichever
+            # sample has the most rows rather than the most rate.
+            Hb, xeb, yeb = np.histogram2d(bx, by, bins=80, range=[xrng, yrng],
+                                          weights=wb_cut, density=True)
+            Hb_m = np.ma.masked_where(Hb <= 0, Hb)
+            posb = Hb[Hb > 0]
+            nb = (LogNorm(vmin=float(posb.min()) if len(posb) else 1e-10,
+                          vmax=float(posb.max()) if len(posb) else 1.0)
+                  if use_log else None)
+            pcmb = ax_bkg.pcolormesh(xeb, yeb, Hb_m.T, cmap='magma', norm=nb)
+            ax_cbar_b.cla()
+            fig.colorbar(pcmb, cax=ax_cbar_b, label='Bkg density')
+            ax_bkg.set_title('Standard-Model background (weighted, all processes)',
+                             fontsize=10)
+            if use_fixed:
+                ax_bkg.set_xlim(xrng)
+                ax_bkg.set_ylim(yrng)
+        else:
+            ax_cbar_b.cla()
+            ax_cbar_b.axis('off')
+            msg = _BKG['error'] or 'background: too few events pass the cuts'
+            ax_bkg.text(0.5, 0.5, msg, ha='center', va='center', fontsize=9,
+                        color='#888', wrap=True, transform=ax_bkg.transAxes)
+            ax_bkg.set_title('Standard-Model background', fontsize=10)
+        ax_bkg.set_xlabel(xlbl, fontsize=10)
+        ax_bkg.set_ylabel(ylbl, fontsize=10)
+
+        _state['b_mask'] = b_mask_full
+        _update_significance()
         fig.canvas.draw_idle()
+
+    # ── S/sqrt(B) ────────────────────────────────────────────────────────────
+    def _update_significance(_=None):
+        """
+        Recompute the significance block from cached state.
+
+        The signal acceptance is taken from the FULL model sample with only the
+        cut panel applied -- never from the plot-filtered array -- so S does not
+        change when the plotted features change.
+
+        Cheap by design: g_q and L alter no distribution, so their observers call
+        only this, reusing the background cut mask cached by the last _draw.
+        """
+        b_mask_full = _state.get('b_mask')
+        Xall = _state['model_samples']
+        sp   = _get_scan_point()
+        mZ   = sp.get('mZ')
+        gq, lumi = w_gq.value, w_lumi.value
+
+        if Xall is None or mZ is None:
+            w_sig.value = ''
+            return
+
+        n_tot  = len(Xall)
+        n_pass = int(_cut_mask(Xall).sum())
+        sigma  = normalisation.signal_sigma_pb(mZ, gq)
+        S, sc  = normalisation.signal_counts(sigma, lumi, n_pass, n_tot, mZ=mZ)
+        S_err  = sc['total']
+
+        bench = ('&nbsp;<span style="color:#c0392b">benchmark-only</span>'
+                 if normalisation.is_benchmark_only(gq) else '')
+
+        # The S uncertainty is shown BROKEN DOWN, not as one number: the three
+        # pieces are different kinds of thing and shrink for different reasons.
+        # acceptance -> draw more model samples;  sigma MC -> more events in
+        # signal/make_xsec.py;  interp -> a bound, exactly zero on a grid mass.
+        def _pc(x):
+            return f'{100.0 * x / S:.2f}%' if S > 0 else '--'
+        grid_note = ('&nbsp;<span style="color:#1e8449">(exact: on a tabulated '
+                     'mass)</span>' if normalisation.on_sigma_grid(mZ) else '')
+        breakdown = (
+            f'<br><span style="font-size:0.82em; color:#555">'
+            f'&nbsp;&nbsp;S err = acceptance {_pc(sc["acceptance"])}'
+            f' &oplus; &sigma;<sub>MC</sub> {_pc(sc["sigma_mc"])}'
+            f' &oplus; interp {_pc(sc["sigma_interp"])}{grid_note}'
+            f'<br>&nbsp;&nbsp;<i>excludes the LO K-factor, which is larger than '
+            f'all three</i></span>')
+
+        # Say plainly which background cache is in use.  The committed demo
+        # cache is thinned ~50x, so its MC errors are inflated by ~sqrt(50);
+        # without this banner a fresh clone's S/sqrt(B) looks like the real one.
+        demo = ('<span style="color:#c0392b; font-size:0.85em">'
+                '&#9888; DEMO background (thinned, committed sample) &mdash; '
+                'MC errors inflated; not for physics</span><br>'
+                if normalisation.LOADED_CACHE_IS_DEMO else '')
+        head = (f'<div style="font-family:Times New Roman,serif">'
+                + demo +
+                f'<b>Rate</b> &nbsp; &sigma;={sigma:.3e} pb &nbsp; '
+                f'g<sub>q</sub>={gq:.4f}{bench} &nbsp; '
+                f'BR<sub>dark</sub>={normalisation.br_dark(gq):.3f}<br>'
+                f'&epsilon;<sub>S</sub>={n_pass:,}/{n_tot:,} &nbsp; '
+                f'<b>S={S:,.1f}</b> &plusmn; {S_err:,.1f}'
+                + breakdown)
+
+        if b_mask_full is None:
+            w_sig.value = head + '<br><i style="color:#888">no background loaded</i></div>'
+            return
+
+        d = normalisation.background_diagnostics(
+            _BKG['w'], _BKG['sid'], _BKG['names'], b_mask_full, lumi)
+        B, B_err = d['b'], d['b'] * d['mc_rel_err']
+        r = normalisation.significance(S, B, b_err=B_err, s_err=S_err)
+
+        # Trust indicators, in the order they should be read.
+        qcd = 100 * d['qcd_frac']
+        qcol = '#c0392b' if qcd > 90 else ('#d68910' if qcd > 70 else '#1e8449')
+        wcol = '#c0392b' if d['worst_frac'] > 0.05 else '#555'
+        mcol = '#c0392b' if d['mc_rel_err'] > 0.3 else '#555'
+        if r.get('no_background'):
+            # Never print "inf": with a thinned cache an empty selection is
+            # common, and inf reads as infinite sensitivity rather than as
+            # "no background MC survived, so this is unknown".
+            zstr = ('<span style="color:#c0392b">undetermined</span>'
+                    '<span style="font-size:0.8em; color:#888">'
+                    '&nbsp;(no background events pass the cuts)</span>')
+            warn = ''
+        else:
+            zstr = (f"{r['s_over_sqrt_b']:.3g} &plusmn; "
+                    f"{r.get('s_over_sqrt_b_err', 0.0):.2g}")
+            warn = ('&nbsp;<span style="color:#c0392b">(unreliable)</span>'
+                    if r['unreliable'] else '')
+        w_sig.value = (
+            head +
+            f'<br><b>B={B:,.1f}</b> &plusmn; {B_err:,.1f} &nbsp; '
+            f'(N<sub>eff</sub>={d["n_eff"]:,.0f})'
+            f'<br><span style="font-size:1.15em"><b>S/&radic;B = {zstr}</b></span>'
+            f'{warn}'
+            + ('' if r.get('no_background')
+               else f' &nbsp; <span style="color:#888">Asimov '
+                    f'{r["asimov"]:.3g}</span>')
+            + f'<br><span style="font-size:0.85em">'
+            f'QCD <span style="color:{qcol}"><b>{qcd:.1f}%</b></span> &nbsp;|&nbsp; '
+            f'MC err <span style="color:{mcol}">{100*d["mc_rel_err"]:.1f}%</span> '
+            f'&nbsp;|&nbsp; worst event '
+            f'<span style="color:{wcol}">{100*d["worst_frac"]:.2f}%</span>'
+            f'</span></div>')
 
     # ── Update callbacks ──────────────────────────────────────────────────────
     def update(_=None):
@@ -800,6 +1128,11 @@ def show(n_samples=10_000, scan_dir=None):
 
     w_reset_cuts.on_click(_on_reset_cuts)
 
+    # g_q and L change no plotted distribution, only the counter -- so they get
+    # the cheap observer rather than a full resample-and-redraw.
+    w_gq.observe(_update_significance, names='value')
+    w_lumi.observe(_update_significance, names='value')
+
     # ── Layout ────────────────────────────────────────────────────────────────
     left_panel = widgets.VBox(
         list(sliders.values()) + [
@@ -821,7 +1154,17 @@ def show(n_samples=10_000, scan_dir=None):
             overflow_y='scroll', max_height='340px',
             border='1px solid #ccc', padding='4px 8px'))
 
+    rate_panel = widgets.VBox(
+        [widgets.HTML(
+            '<b style="font-size:0.9em">Rate &amp; significance &nbsp;'
+            '<span style="color:#888; font-weight:normal">'
+            '(these two change only S/&radic;B, not the plots)</span></b>'),
+         w_gq, w_lumi, w_sig],
+        layout=widgets.Layout(
+            border='1px solid #ccc', padding='4px 8px', margin='8px 0px 0px 0px',
+            width='370px'))
+
     display(widgets.HBox(
-        [left_panel, cut_panel],
+        [left_panel, widgets.VBox([cut_panel, rate_panel])],
         layout=widgets.Layout(align_items='flex-start', gap='20px')))
     update()

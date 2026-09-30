@@ -1,0 +1,57 @@
+{
+ "description": "sigma x BR(Z'->dark) for HiddenValley:ffbar2Zv at eCM=14 TeV, measured with PYTHIA 8.317 at the reference couplings below. Rescale with sigma_pb(mZ, g_q) in src/normalisation.py.",
+ "eCM_GeV": 14000.0,
+ "reference": {
+  "sm_br_per_flavour": 0.0001,
+  "n_sm_flavours": 6,
+  "br_dark": 0.9994,
+  "width_over_mass": 0.025,
+  "g_q": 0.005604991216397929,
+  "g_q_max_consistent": 0.1618021593796416,
+  "comment": "g_q is inferred from Gamma_1flav = g_q^2 M/(4 pi), treating the coupling as purely vector. g_q_max_consistent is the ceiling at this forced width; above it the sample rate is benchmark-only."
+ },
+ "n_event_per_point": 4000,
+ "interpolation": "pchip in (ln mZ, ln sigma)",
+ "points": [
+  {
+   "mZ": 499.99999999999994,
+   "sigma_pb": 0.1189161,
+   "err_pb": 0.0009905547
+  },
+  {
+   "mZ": 672.9500963161782,
+   "sigma_pb": 0.04014851,
+   "err_pb": 0.0003380756
+  },
+  {
+   "mZ": 905.7236642639062,
+   "sigma_pb": 0.01270181,
+   "err_pb": 0.00010802
+  },
+  {
+   "mZ": 1219.0136542044752,
+   "sigma_pb": 0.003704479,
+   "err_pb": 3.156049e-05
+  },
+  {
+   "mZ": 1640.6707120152762,
+   "sigma_pb": 0.0009654858,
+   "err_pb": 8.126034e-06
+  },
+  {
+   "mZ": 2208.1790273476236,
+   "sigma_pb": 0.0002123431,
+   "err_pb": 1.768677e-06
+  },
+  {
+   "mZ": 2971.9885782738966,
+   "sigma_pb": 3.757762e-05,
+   "err_pb": 3.09565e-07
+  },
+  {
+   "mZ": 4000.000000000001,
+   "sigma_pb": 4.668512e-06,
+   "err_pb": 3.854243e-08
+  }
+ ]
+}

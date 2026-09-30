@@ -352,13 +352,28 @@ OBSERVABLES = {
     },
 
     # ── hemiMass2: smaller hemisphere invariant mass ──────────────────────────
+    # ── hemiMass2: smaller hemisphere mass ───────────────────────────────────
+    # Has a LARGE atom at exactly 0: one hemisphere frequently carries no
+    # reconstructed jet mass at all.  Measured on the truth production grid,
+    # hemiMass2 == 0 in 35.6% of events on average, ranging 6.7% to 65.0%
+    # across grid points (hemiMass1 is never 0).  Without point_mass, boxcox
+    # rejects the column with "Data must be positive." and every re-fit of a
+    # selection containing it fails -- which is the real reason this observable
+    # was default_include=False rather than any preference.
+    #
+    # Treated exactly as maxMuPt is: an atom at zero plus boxcox+gennorm on the
+    # positive part.  Note that p0 itself varies strongly over the physics grid,
+    # so it carries information rather than being a nuisance.
     'hemiMass2': {
         'col':             'hemiMass2',
         'pipeline':        [('boxcox', {})],
         'distribution':    'gennorm',
         'default_include': False,
         'label':           r'Hemi-mass 2 (GeV)',
-        'desc':            'Smaller invariant mass of the two event hemispheres.',
+        'desc':            'Smaller invariant mass of the two event hemispheres. '
+                           'Zero in 35-65% of events (empty hemisphere).',
+        'point_mass':      {'value': 0.0, 'tol': 1e-10, 'symmetric': False,
+                            'min_p0': 0.001},
     },
 
     # ── ptBal: pT balance ─────────────────────────────────────────────────────
