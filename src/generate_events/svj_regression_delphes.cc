@@ -122,6 +122,7 @@ static int    jetsVisOnly = 1;
 static int    dijetOnly   = 0;
 static double visJetPtMin = 20.0;
 static std::string tsvFile     = "simulated/tsv/jets_delphes.tsv";
+static std::string pythiaCmnd = "";   // background mode: see setupPythia
 static std::string delphesCard = "src/generate_events/svj_delphes_particles.tcl";
 
 static void rs(Pythia& p, const std::string& key, double val) {
@@ -133,6 +134,29 @@ static void rs(Pythia& p, const std::string& key, double val) {
 // Copied verbatim from svj_regression.cc's setupPythia() -- same HiddenValley
 // SVJ physics model. See svj_regression.cc for the physics commentary.
 static bool setupPythia(Pythia& pythia, int seed) {
+  // Background mode.  With `pythia_cmnd` set, the entire HiddenValley signal
+  // configuration below is skipped and the process is taken from that file
+  // instead -- which is all a Standard-Model background sample needs, since
+  // svj_observables_common.h contains no signal-specific code and computes the
+  // same 28 observables regardless of what produced the event.
+  //
+  // The seed is still set here rather than in the file, so per-job seeding
+  // works identically for signal and background; a seed line in the .cmnd
+  // would be silently overridden.
+  if (!pythiaCmnd.empty()) {
+    if (!pythia.readFile(pythiaCmnd)) {
+      std::cerr << "ERROR: cannot read pythia_cmnd file: " << pythiaCmnd << "\n";
+      return false;
+    }
+    pythia.readString("Random:setSeed = on");
+    rs(pythia, "Random:seed", seed);
+    if (!pythia.init()) {
+      std::cerr << "ERROR: pythia.init() failed for " << pythiaCmnd << "\n";
+      return false;
+    }
+    return true;
+  }
+
   pythia.readString("Beams:eCM = 14000.");
   pythia.readString("HiddenValley:ffbar2Zv = on");
 
@@ -362,6 +386,7 @@ int main(int argc, char* argv[]) {
   visJetPtMin = cfgDouble(cfg, "vis_jet_pt_min", visJetPtMin);
   tsvFile     = cfgStr   (cfg, "tsv_file",       tsvFile);
   delphesCard = cfgStr   (cfg, "delphes_card",   delphesCard);
+  pythiaCmnd  = cfgStr   (cfg, "pythia_cmnd",    pythiaCmnd);
 
   if (rinv_rho < 0.0 || rinv_rho >= 1.0 || Brmu < 0.0 || Brmu > 1.0) {
     std::cerr << "Error: rinv_rho=" << rinv_rho << " Brmu=" << Brmu

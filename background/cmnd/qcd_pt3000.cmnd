@@ -1,0 +1,6 @@
+Beams:eCM = 14000.
+Beams:idA = 2212
+Beams:idB = 2212
+PhaseSpace:pTHatMin = 3000
+PhaseSpace:pTHatMax = -1
+HardQCD:all = on

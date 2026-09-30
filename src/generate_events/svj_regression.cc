@@ -59,6 +59,12 @@ static std::string cfgStr(const std::map<std::string,std::string>& cfg,
 }
 
 // Physics parameters
+// Background mode: when set (cfg key `pythia_cmnd`), the HiddenValley signal
+// setup in setupPythia() is skipped and the process comes from this file.
+// Mirrors svj_regression_delphes.cc so truth and detector-level backgrounds are
+// configured identically.  See docs/backgrounds.md.
+static std::string pythiaCmnd = "";
+
 static double mZ        = 2000.0;
 static double mq        =    4.0;
 static double mPi       =    8.0;
@@ -87,6 +93,29 @@ static void rs(Pythia& p, const std::string& key, double val) {
 }
 
 static bool setupPythia(Pythia& pythia, int seed) {
+  // Background mode.  With `pythia_cmnd` set, the entire HiddenValley signal
+  // configuration below is skipped and the process is taken from that file
+  // instead -- all a Standard-Model background sample needs, since
+  // svj_observables_common.h contains no signal-specific code and computes the
+  // same observables regardless of what produced the event.
+  //
+  // The seed is still set here rather than in the file, so per-job seeding
+  // works identically for signal and background; a seed line in the .cmnd
+  // would be silently overridden.
+  if (!pythiaCmnd.empty()) {
+    if (!pythia.readFile(pythiaCmnd)) {
+      std::cerr << "ERROR: cannot read pythia_cmnd file: " << pythiaCmnd << "\n";
+      return false;
+    }
+    pythia.readString("Random:setSeed = on");
+    rs(pythia, "Random:seed", seed);
+    if (!pythia.init()) {
+      std::cerr << "ERROR: pythia.init() failed for " << pythiaCmnd << "\n";
+      return false;
+    }
+    return true;
+  }
+
   pythia.readString("Beams:eCM = 14000.");
   pythia.readString("HiddenValley:ffbar2Zv = on");
 
@@ -341,6 +370,7 @@ int main(int argc, char* argv[]) {
   jetsVisOnly = cfgInt  (cfg, "jets_vis_only", jetsVisOnly);
   dijetOnly   = cfgInt  (cfg, "dijet_only",    dijetOnly);
   visJetPtMin = cfgDouble(cfg, "vis_jet_pt_min", visJetPtMin);
+  pythiaCmnd  = cfgStr  (cfg, "pythia_cmnd",   pythiaCmnd);
   tsvFile     = cfgStr  (cfg, "tsv_file",      tsvFile);
   tsvKinFile  = cfgStr  (cfg, "tsv_kin_file",  tsvKinFile);
 

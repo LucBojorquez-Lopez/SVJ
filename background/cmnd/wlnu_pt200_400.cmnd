@@ -1,0 +1,9 @@
+Beams:eCM = 14000.
+Beams:idA = 2212
+Beams:idB = 2212
+PhaseSpace:pTHatMin = 200
+PhaseSpace:pTHatMax = 400
+WeakBosonAndParton:qqbar2Wg = on
+WeakBosonAndParton:qg2Wq = on
+24:onMode = off
+24:onIfAny = 11 12 13 14 15 16

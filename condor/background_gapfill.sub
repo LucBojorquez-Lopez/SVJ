@@ -1,0 +1,36 @@
+# SM background generation -- see docs/backgrounds.md.
+#
+# 17 samples x 20 shards x 50k events = 17M events, ~47 core-hours at the
+# measured Delphes rate of ~100 ev/s.  One core per job and a short flavour,
+# for the reason recorded in lxplus.md section 9: a 16-core request does not
+# schedule on this farm.
+include : condor/_common.inc
+
+arguments = "background 1 $(SHARD)"
+environment = "SVJ_REPO=$(SVJ_REPO_DIR) SVJ_BG_SAMPLE=$(SAMPLE)"
+
+output = $(SVJ_AFS_DIR)/logs/bg_$(SAMPLE)_$(ClusterId)_$(SHARD).out
+error  = $(SVJ_AFS_DIR)/logs/bg_$(SAMPLE)_$(ClusterId)_$(SHARD).err
+log    = $(SVJ_AFS_DIR)/logs/bg_$(ClusterId).log
+
+request_cpus   = 1
+request_memory = 2 GB
+request_disk   = 4 GB
++JobFlavour    = "workday"
+
+
+# Gap-fill (2026-09-07).  19 of the original 340 jobs failed within seconds of
+# submission with "unknown workflow 'background' (want scan|tsv|validation)" --
+# they read a stale svj_job.sh from the EOS cache before the version adding the
+# background) case was visible on the worker.  Nothing wrong with the config or
+# the physics; the file has been correct ever since, and every job that started
+# later succeeded.  If a future submit shows the same signature, wait a minute
+# Gap-fill pass 2 (2026-09-07).  diboson shard 4 died with the same Delphes
+# SimpleCalorimeter segfault as the scan points.  The background workflow
+# derives the PYTHIA seed from the shard index, so re-running shard 4 would
+# reproduce the crash exactly.  Submitted as shard 20 instead: a new index
+# means a new seed, and the loader globs diboson_*.tsv and normalises by the
+# shards that actually landed, so 20 shards is 20 shards either way.
+queue SAMPLE, SHARD from (
+diboson, 20
+)

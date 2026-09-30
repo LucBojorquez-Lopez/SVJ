@@ -1,0 +1,7 @@
+Beams:eCM = 14000.
+Beams:idA = 2212
+Beams:idB = 2212
+PhaseSpace:pTHatMin = 0
+PhaseSpace:pTHatMax = -1
+Top:qq2tq(t:W) = on
+Top:ffbar2tqbar(s:W) = on

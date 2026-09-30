@@ -70,9 +70,20 @@ case "$WORKFLOW" in
 
   scan)
     echo "    cfg:     $SVJ_SCAN_CFG"
+    # Raw-event saving is opt-in per submit file, via the environment rather
+    # than a new positional argument, so every existing .sub keeps working
+    # unchanged.  SVJ_SAVE_RAW=1 turns it on; SVJ_RAW_OBS picks the stored
+    # columns ('all' by default -- see scan_svj.py --raw-obs).
+    SCAN_EXTRA=()
+    if [[ "${SVJ_SAVE_RAW:-0}" == "1" ]]; then
+        SCAN_EXTRA+=(--save-raw)
+        [[ -n "${SVJ_RAW_OBS:-}" ]] && SCAN_EXTRA+=(--raw-obs "$SVJ_RAW_OBS")
+        echo "    save-raw: yes  (raw-obs=${SVJ_RAW_OBS:-all})"
+    fi
     python src/run_regression/scan_svj.py \
         "$SVJ_SCAN_CFG" \
-        --job-index "$TASK" --n-jobs "$N_JOBS"
+        --job-index "$TASK" --n-jobs "$N_JOBS" \
+        "${SCAN_EXTRA[@]}"
     ;;
 
   tsv)
@@ -122,6 +133,35 @@ EOCFG
     rm -f "$TMP_CFG"
     ;;
 
+  background)
+    # Standard-Model background generation (docs/backgrounds.md).  One sample
+    # per SVJ_BG_SAMPLE, sharded by TASK; each shard gets its own seed_offset so
+    # PYTHIA seeds never collide, exactly as the tsv workflow does.
+    : "${SVJ_BG_SAMPLE:?set SVJ_BG_SAMPLE (see background/cfg/)}"
+    BG_OUT="${SVJ_BG_OUT:-/eos/user/l/lbojorqu/svj/background/tsv}"
+    mkdir -p "$BG_OUT"
+    # SVJ_BG_BINARY selects the stream.  Default is the Delphes generator; set it
+    # to svj_regression for a truth-level counterpart.  Both read the SAME cfg --
+    # the truth binary just ignores delphes_card -- so the two streams cannot
+    # drift apart in process, slice boundaries or cross section.
+    BIN="src/generate_events/${SVJ_BG_BINARY:-svj_regression_delphes}"
+    [[ -x "$BIN" ]] || { echo "ERROR: $BIN missing -- run 'make delphes' (or 'make svj_regression')" >&2; exit 1; }
+    CFG="background/cfg/${SVJ_BG_SAMPLE}.cfg"
+    [[ -f "$CFG" ]] || { echo "ERROR: no cfg at $CFG" >&2; exit 1; }
+    TMP_CFG="${TMPDIR:-/tmp}/bg_${SVJ_BG_SAMPLE}_${TASK}.cfg"
+    # readConfig takes the LAST occurrence of a key, so appended lines override.
+    cat "$CFG" > "$TMP_CFG"
+    cat >> "$TMP_CFG" <<EOCFG
+
+seed_offset = ${TASK}
+tsv_file    = ${BG_OUT}/${SVJ_BG_SAMPLE}_${TASK}.tsv
+EOCFG
+    echo "    sample:  $SVJ_BG_SAMPLE  shard $TASK"
+    echo "    output:  ${BG_OUT}/${SVJ_BG_SAMPLE}_${TASK}.tsv"
+    "$BIN" "$TMP_CFG"
+    rm -f "$TMP_CFG"
+    ;;
+
   validation)
     python src/run_regression/validate_production.py \
         simulated/svj/svj_scan.npz \
@@ -131,7 +171,7 @@ EOCFG
     ;;
 
   *)
-    echo "ERROR: unknown workflow '$WORKFLOW' (want scan|tsv|validation)" >&2
+    echo "ERROR: unknown workflow '$WORKFLOW' (want scan|tsv|validation|background)" >&2
     exit 1
     ;;
 esac
