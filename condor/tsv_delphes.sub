@@ -32,11 +32,14 @@ request_cpus   = 1
 request_memory = 2 GB
 request_disk   = 4 GB
 
-# UNCALIBRATED.  Delphes costs far more per event than the truth generator, and
-# with one thread a 50 000-event shard (nEvent in svj_regression_delphes.cfg) is
-# much slower than the truth equivalent. Time one shard interactively, or watch
-# the first array, before trusting this flavour; if jobs are being evicted,
-# either raise it to "tomorrow" or cut nEvent and raise `queue`.
-+JobFlavour    = "workday"
+# Calibrated on an lxplus login node, not guessed.  svj_regression_delphes runs
+# at ~100 events/s on one thread -- only ~1.15x slower per event than the truth
+# generator, rising to ~1.3x at high mZ, because PYTHIA generation dominates and
+# not reconstruction.  A 50 000-event shard (nEvent in
+# svj_regression_delphes.cfg) is therefore ~8.5 min of compute.  microcentury
+# (1 h) leaves a wide margin; espresso (20 min) would fit but leaves little room
+# for a slow worker or a slow EOS write.  If you raise nEvent past ~300 000 per
+# shard, move up to longlunch.
++JobFlavour    = "microcentury"
 
 queue 8

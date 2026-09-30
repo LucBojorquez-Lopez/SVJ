@@ -1,0 +1,41 @@
+# Production raw-capture scan, TRUTH stream.  See docs/raw-store.md.
+#
+# Sizing note, learned the hard way.  The first attempt used request_cpus = 16
+# and queue 32.  It sat IDLE for 10.4 hours before a single slot matched:
+# condor_q -better-analyze said "1 slots match and are willing to run your job,
+# 3226 slots would match if drained".  A 16-core request is effectively a
+# whole-node reservation, and the farm is full of partly-occupied machines --
+# there are ~110k single-core slots against roughly one free 16-core slot.
+#
+# So: one core per job, many more jobs.  Same total CPU-hours, but the jobs
+# actually start.  16384 points / 512 jobs = 32 points per job; measured worker
+# throughput is ~2.2x slower than the login-node benchmark, so ~4 h per job for
+# truth and ~4.8 h for Delphes -- both comfortably inside "workday".
+#
+# Keep the flavour short.  Flavour selects hostgroup, and the long ones are
+# starved too: the same analysis found 4339 slots in "mixed" against 22 in
+# "sharelong".  Do not "fix" a timeout by reaching for tomorrow/testmatch.
+
+include : condor/_common.inc
+
+arguments = "scan 512 $(SLICE)"
+environment = "SVJ_REPO=$(SVJ_REPO_DIR) SVJ_SCAN_CFG=src/run_regression/scan_prod_truth.cfg SVJ_SAVE_RAW=1 SVJ_RAW_OBS=all"
+
+output = $(SVJ_AFS_DIR)/logs/rawtruth_$(ClusterId)_$(SLICE).out
+error  = $(SVJ_AFS_DIR)/logs/rawtruth_$(ClusterId)_$(SLICE).err
+log    = $(SVJ_AFS_DIR)/logs/rawtruth_$(ClusterId).log
+
+request_cpus   = 1
+request_memory = 2 GB
+request_disk   = 4 GB
++JobFlavour    = "workday"
+
+# Recovery: slices whose raw store was destroyed by the truncating
+# RawWriter (fixed 2026-09-06).  Their NPZ and raw were moved aside so
+# resume regenerates all 32 points rather than skipping them.
+queue SLICE from (
+235
+309
+349
+409
+)

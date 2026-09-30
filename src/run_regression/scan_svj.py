@@ -65,6 +65,8 @@ import json
 import itertools
 import configparser
 import numpy as np
+
+import raw_store
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -214,7 +216,19 @@ def fit_mvn_corr(X):
 
 # ── Temp config writer ─────────────────────────────────────────────────────────
 
-def write_point_cfg(path, point_params, nEvent, nWorkers, tsv_file):
+# Delphes can segfault inside SimpleCalorimeter::Process() on a rare
+# pathological event.  The crash is deterministic in the PYTHIA seed, so a
+# plain resubmission re-crashes forever: 11 Delphes grid points and one
+# background shard were stuck that way until 2026-09-07, surviving every
+# retry because write_point_cfg wrote no seed and each attempt was identical.
+# Retrying with a different seed steps around the offending event (verified:
+# the same point that crashed in 6 s at seed_offset 0 completed normally at 1).
+_SEED_RETRIES = 3
+_SEED_STRIDE = 7919          # prime, so successive attempts are far apart
+
+
+def write_point_cfg(path, point_params, nEvent, nWorkers, tsv_file,
+                    seed_offset=0):
     with open(path, 'w') as f:
         f.write("# auto-generated per-point config\n")
         for k, v in point_params.items():
@@ -223,6 +237,8 @@ def write_point_cfg(path, point_params, nEvent, nWorkers, tsv_file):
         f.write(f"nWorkers   = {nWorkers}\n")
         f.write(f"save_tsv   = 1\n")
         f.write(f"tsv_file   = {tsv_file}\n")
+        if seed_offset:
+            f.write(f"seed_offset = {seed_offset}\n")
 
 
 # ── Per-observable transform + fit  ───────────────────────────────────────────
@@ -274,7 +290,7 @@ def _worker(args):
     Run one grid point.
 
     args = (task_id, grid_indices, point_params, nEvent, nWorkers_inner,
-            obs_selection, save_raw, binary_path)
+            obs_selection, save_raw, binary_path, raw_selection)
 
     Returns
     -------
@@ -282,7 +298,8 @@ def _worker(args):
     (grid_indices, None, None, None, None, cpp_peak_kb_or_0)              on failure
     """
     (task_id, grid_indices, point_params,
-     nEvent, nWorkers_inner, obs_selection, save_raw, binary_path) = args
+     nEvent, nWorkers_inner, obs_selection, save_raw, binary_path,
+     raw_selection) = args
 
     # tempfile.gettempdir() honours $TMPDIR.  Batch systems point that at
     # job-private scratch (HTCondor does so on lxplus), whereas worker-node
@@ -293,19 +310,29 @@ def _worker(args):
     temp_tsv = os.path.join(_scratch, f'svj_scan_{task_id}.tsv')
     fail     = (grid_indices, None, None, None, None, 0)
 
-    write_point_cfg(temp_cfg, point_params, nEvent, nWorkers_inner, temp_tsv)
-
     try:
-        proc = subprocess.run([binary_path, temp_cfg], capture_output=True, text=True)
-        # Capture C++ peak RSS immediately after binary exits (RUSAGE_CHILDREN
-        # accumulates across all subprocess.run calls in this worker process).
-        cpp_peak_kb = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
-        fail = (grid_indices, None, None, None, None, cpp_peak_kb)
+        # Only crash-shaped failures are retried with a fresh seed.  A point
+        # that runs to completion but yields too few valid events has a physics
+        # problem, and a new seed would only hide it.
+        for attempt in range(_SEED_RETRIES + 1):
+            write_point_cfg(temp_cfg, point_params, nEvent, nWorkers_inner,
+                            temp_tsv, seed_offset=attempt * _SEED_STRIDE)
+            proc = subprocess.run([binary_path, temp_cfg],
+                                  capture_output=True, text=True)
+            # Capture C++ peak RSS immediately after binary exits
+            # (RUSAGE_CHILDREN accumulates across all subprocess.run calls in
+            # this worker process).
+            cpp_peak_kb = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+            fail = (grid_indices, None, None, None, None, cpp_peak_kb)
 
-        if proc.returncode != 0:
-            return fail
-
-        if not os.path.exists(temp_tsv):
+            if proc.returncode == 0 and os.path.exists(temp_tsv):
+                break
+            # Leave no half-written TSV for the next attempt to load.
+            try:
+                os.remove(temp_tsv)
+            except OSError:
+                pass
+        else:
             return fail
 
         try:
@@ -336,7 +363,15 @@ def _worker(args):
         except Exception:
             return fail
 
-        raw_X = (X_valid[:, [col_map[OBSERVABLES[n]['col']] for n in obs_selection]]
+        # Saved columns are deliberately NOT obs_selection.  Two observables
+        # (closeJetIsLead, nInvClose) have no fit pipeline and so can never be
+        # fitted, but their raw values are still worth keeping -- the point of
+        # the raw store is that no observable is ever lost to a re-simulation.
+        #
+        # The rows, however, are the events that passed event_valid_mask for
+        # obs_selection.  A later re-fit therefore sees a sample already
+        # filtered by the observables fitted here, not an unfiltered one.
+        raw_X = (X_valid[:, [col_map[OBSERVABLES[n]['col']] for n in raw_selection]]
                  if save_raw else None)
 
         return (grid_indices, flat_params, R_upper, raw_X, n_disc, cpp_peak_kb)
@@ -390,10 +425,11 @@ def _save_metadata(out_dir, scan_cfg: ScanConfig,
         json.dump(meta, f, indent=2)
 
 
-def _save_raw_npz(out_file, raw_flat, raw_grid_flat):
-    np.savez(out_file,
-             raw_flat      = raw_flat,
-             raw_grid_flat = raw_grid_flat)
+# Raw events are written through raw_store.RawWriter, which streams one grid
+# point at a time.  The previous implementation accumulated every point in a
+# list and np.vstack'd at the end, which doubled peak RSS and put a full-grid
+# shard well past its Condor memory request; see raw_store.py for the full
+# reasoning and the on-disk layout.
 
 
 # ── Merge helper ───────────────────────────────────────────────────────────────
@@ -464,6 +500,11 @@ def main():
                         help='Keep per-job shard NPZs after merging (default: delete on success)')
     parser.add_argument('--save-raw', action='store_true',
                         help='Save pre-transform event data alongside the NPZ')
+    parser.add_argument('--raw-obs', default='all',
+                        help="Observables to write to the raw store: 'all' "
+                             "(every observable the generator computes, the "
+                             "default and the reason the store exists), 'fitted' "
+                             "(mirror --obs), or a comma-separated list")
     args = parser.parse_args()
 
     job_index = args.job_index
@@ -523,6 +564,22 @@ def main():
         obs_selection = [s.strip() for s in args.obs.split(',')]
     else:
         obs_selection = DEFAULT_SCAN
+
+    # Which columns land in the raw store.  Defaults to everything the
+    # generator computes: storage is cheap next to re-running PYTHIA, and an
+    # observable left out today cannot be recovered without a full re-scan.
+    # RAW_BASE excludes the registry's derived ratios, which are recomputable.
+    RAW_BASE = [n for n, spec in OBSERVABLES.items() if '/' not in n]
+    if args.raw_obs == 'all':
+        raw_selection = RAW_BASE
+    elif args.raw_obs == 'fitted':
+        raw_selection = list(obs_selection)
+    else:
+        raw_selection = [x.strip() for x in args.raw_obs.split(',')]
+    unknown = [n for n in raw_selection if n not in OBSERVABLES]
+    if unknown:
+        print(f"Error: unknown observable(s) in --raw-obs: {unknown}")
+        sys.exit(1)
     validate_scan_selection(obs_selection)
     n_obs       = len(obs_selection)
     n_corr      = n_obs * (n_obs - 1) // 2
@@ -585,7 +642,8 @@ def main():
         # flat_idx is unique across all grid points — use it directly for /tmp filenames
         task_id = flat_idx
         tasks.append((task_id, gidx, point_params,
-                      nEvent, nWorkers_inn, obs_selection, save_raw, binary_path))
+                      nEvent, nWorkers_inn, obs_selection, save_raw, binary_path,
+                      raw_selection))
 
     n_todo  = len(tasks)
     job_str = f"job {job_index}/{n_jobs-1}  " if n_jobs > 1 else ""
@@ -600,7 +658,8 @@ def main():
     print(f"  To do:      {n_todo}  (already done: {n_preloaded})")
     print(f"  Events/pt:  {nEvent}")
     if save_raw:
-        print("  --save-raw: raw events will be written alongside NPZ")
+        print(f"  --save-raw: {len(raw_selection)} observables -> raw store")
+        print(f"    {raw_selection}")
     print(f"  Output:     {out_file}\n")
 
     if n_todo == 0:
@@ -615,8 +674,9 @@ def main():
     failed = 0
     width  = len(str(n_todo))
 
-    raw_flat_list      = [] if save_raw else None
-    raw_grid_flat_list = [] if save_raw else None
+    raw_writer = (raw_store.RawWriter(out_dir / out_file.stem,
+                                      raw_selection, axis_names)
+                  if save_raw else None)
     cpp_rss_kb_list: list = []
 
     with ProcessPoolExecutor(max_workers=n_outer) as ex:
@@ -641,11 +701,8 @@ def main():
                 param_flat[gidx + (slice(None, corr_start),)]  = flat_p
                 param_flat[gidx + (slice(corr_start, None),)]  = R_upper
 
-                if save_raw and raw_X is not None:
-                    n_ev = len(raw_X)
-                    raw_flat_list.append(raw_X)
-                    raw_grid_flat_list.append(
-                        np.tile(list(gidx), (n_ev, 1)))
+                if raw_writer is not None and raw_X is not None:
+                    raw_writer.append(gidx, raw_X)
                 if cpp_rss_kb:
                     cpp_rss_kb_list.append(cpp_rss_kb)
             else:
@@ -675,6 +732,10 @@ def main():
             if done % chk_every == 0:
                 _save(out_file, scan_cfg, param_flat, obs_offsets,
                       obs_selection, scan_p_arr, scan_param_names, n_obs)
+                # Flush the raw index too, so a job killed between checkpoints
+                # still leaves a store readable up to the last one.
+                if raw_writer is not None:
+                    raw_writer.flush()
                 print(f"  [checkpoint @ {done}]", flush=True)
 
     elapsed_total = time.time() - t0
@@ -690,12 +751,14 @@ def main():
 
     _save_metadata(out_dir, scan_cfg, obs_selection, obs_offsets, n_corr, binary_name)
 
-    if save_raw and raw_flat_list:
-        raw_file = out_dir / (out_file.stem + '_raw.npz')
-        _save_raw_npz(raw_file,
-                      np.vstack(raw_flat_list),
-                      np.vstack(raw_grid_flat_list))
-        print(f"Raw events → {raw_file}")
+    if raw_writer is not None:
+        raw_writer.close()
+        if raw_writer.n_points:
+            gb = raw_writer.bin_path.stat().st_size / 1e9
+            print(f"Raw events → {raw_writer.bin_path}")
+            print(f"  {raw_writer.n_rows:,} events x {len(raw_selection)} obs "
+                  f"over {raw_writer.n_points:,} points  ({gb:.2f} GB, float32)")
+            print(f"  index    → {raw_writer.idx_path}")
 
     # ── Resource usage report ────────────────────────────────────────────────────
     _self_kb   = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
