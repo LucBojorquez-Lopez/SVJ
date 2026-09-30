@@ -4,6 +4,7 @@ src/generate_events/svj_regression
 # the machine that built it, so a committed one is useless anywhere else.
 src/generate_events/svj_regression_delphes
 src/generate_events/svj_delphes_test
+src/generate_events/svj_xsec
 
 # Locally built PYTHIA / FastJet, if $SVJ_WORK is placed inside a clone.
 # The default is a sibling of the repo, so this is belt-and-braces.
@@ -41,3 +42,18 @@ simulated/svj/validation_production_*.npz
 # Ad-hoc validate_fit.py outputs.  That script requires an explicit --out, so
 # these are always deliberate one-offs, not part of a working example.
 simulated/svj/validation_fit*.npz
+
+# Raw event stores (docs/raw-store.md).  Tens of GB; production runs write them
+# outside the repository, but a default-output_dir run would land them here.
+simulated/svj/*_raw.f32
+simulated/svj/*_raw.idx.npz
+simulated_prod*/
+
+# Merged background event cache (~1.3 GB).  Canonical copy lives on EOS at
+# /eos/user/l/lbojorqu/svj/background/; this path is only a local convenience
+# copy for running the GUI off a laptop.  See docs/normalisation.md.
+background/background_events.npz
+# ...but background_events_demo.npz IS committed (~27 MB): it is the thinned
+# sample that lets a fresh clone drive the GUI's background panel and S/sqrt(B)
+# without either EOS access or a 57-core-hour regeneration.  Deliberately a
+# different filename so this rule cannot swallow it.

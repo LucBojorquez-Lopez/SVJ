@@ -21,6 +21,35 @@ things built on top of the same ROOT/Delphes dependencies:
 > sibling-directory layout below is the *local workstation* arrangement. What
 > stays true on both: the `make` targets, the cfg keys, and everything from
 > "Production binary" onward.
+>
+> One lxplus-specific trap is documented in [lxplus.md](lxplus.md) §2 under
+> "The compiler trap": ROOT from the view is gcc-13-built, so the ROOT-linked
+> targets cannot be compiled with the EL9 system gcc 11 that PYTHIA's
+> `Makefile.inc` otherwise selects. The `Makefile` resolves this itself via
+> `root-config --cxx`; you should never need to pass `CXX` by hand.
+
+## What it costs
+
+Measured on an lxplus login node (LCG_110, ROOT 6.40.02, one thread,
+`svj_regression_delphes.cfg` defaults):
+
+| | truth, 1 thread | Delphes, 1 thread | penalty |
+|---|---|---|---|
+| `mZ = 500`, 2000 events | 18.3 s | 21.0 s | 1.14× |
+| `mZ = 500`, 4000 events | 35.3 s | 40.2 s | 1.14× |
+| `mZ = 4000`, 2000 events | 15.8 s | 20.3 s | 1.28× |
+
+So detector simulation is a **14–28% surcharge, not a different order of
+magnitude** — PYTHIA generation dominates, and the Delphes share grows with
+particle multiplicity. Two practical consequences:
+
+- Delphes' single-threadedness costs nothing *at scan level*. `scan_svj.py`
+  runs both binaries at `nWorkers = 1` and parallelises with
+  `n_outer_workers`, so a Delphes scan costs roughly 1.2× a truth scan on the
+  same grid — not 16×. It only matters for one-off runs, where
+  `svj_regression` can use all 16 threads and this binary cannot.
+- Event acceptance is slightly lower under Delphes (96.5% vs 97.6% at
+  `mZ = 500`), consistent with jets smearing across `vis_jet_pt_min`.
 
 ## New dependencies
 

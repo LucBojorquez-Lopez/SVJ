@@ -4,16 +4,17 @@ A complete path from `git clone` to submitted batch jobs on lxplus, and an
 explicit account of **what ships with the repository versus what you have to
 rebuild**.
 
-> **Status.** Verified on lxplus (RHEL 9.8, EL9 gcc 11.5, LCG_110, Python 3.13):
-> the environment, `tools/build_deps.sh`, `make svj_regression`, the §5 ladder,
-> `condor/smoke.sub`, a 64-point scan run both locally and as a 4-job Condor
-> array, the `--merge` step, and `fit_raw.py`.
+> **Status.** Verified on lxplus (RHEL 9.8, EL9 gcc 11.5, LCG_110,
+> ROOT 6.40.02, Delphes 3.5.1, Python 3.13): the environment,
+> `tools/build_deps.sh` **including `--delphes`**, `make svj_regression`,
+> **`make delphes`**, the §5 ladder **including rung 5**, `condor/smoke.sub`,
+> a 64-point scan run both locally and as a 4-job Condor array, the `--merge`
+> step, and `fit_raw.py`.
 >
-> Not verified: anything Delphes (§2 "Building Delphes", §5 rung 5,
-> `condor/tsv_delphes.sub`) — written and working locally, never run on lxplus.
-> Also not verified: an array at full production size. `queue 16` with
-> `request_cpus = 16` and the longer job flavours are untried; everything those
-> files do apart from the scale is shared with `smoke.sub` via `_common.inc`.
+> Not verified: an array at full production size, and `condor/tsv_delphes.sub`
+> submitted as an array. `queue 16` with `request_cpus = 16` and the longer job
+> flavours are untried; everything those files do apart from the scale is
+> shared with `smoke.sub` via `_common.inc`.
 > Run §7.3 before any array — it costs a minute.
 
 ---
@@ -216,12 +217,41 @@ PYTHIA than the executable loads, the two would disagree about Pythia8's ABI at
 runtime. The failure mode is a crash somewhere inside Delphes, not a link
 error, so it is worth getting right the first time.
 
-> **Verified locally, not yet on lxplus.** Both binaries build and run against
-> ROOT 6.34 / Delphes 3.5.1 on a local box (a 20-event
-> `svj_regression_delphes` run writes a complete TSV). The `--delphes` path of
-> `build_deps.sh` has **not** been exercised on lxplus — the CVMFS ROOT, the
-> presence of `tclsh`, and the build time are all unconfirmed there. Expect to
-> debug this step; §9 lists what is most likely to bite.
+> **Verified on lxplus.** `tools/build_deps.sh --only-delphes` completes in
+> about 15 minutes against the view's **ROOT 6.40.02** (not the 6.34 the local
+> instructions describe), `tclsh` is present at `/usr/bin/tclsh`, the download
+> URL is reachable, and the script's relocatability assertion passes. `make
+> delphes` then builds both binaries, and §5 rung 5 writes a complete
+> 28-observable TSV.
+
+### The compiler trap for anything linking ROOT
+
+**This is the one thing that will bite you, and the `Makefile` now handles it —
+the note is here so the behaviour is not mysterious.**
+
+With `SVJ_DEPS=local` the `Makefile` picks up `CXX=/usr/bin/g++` from PYTHIA's
+`examples/Makefile.inc` (§4). For `svj_regression` that is exactly right: the
+binary then needs nothing from CVMFS. For anything linking ROOT it is wrong.
+The view's ROOT is built with **gcc 13**, whose `libstdc++` exports
+`GLIBCXX_3.4.30` and `.31`; EL9's system gcc 11 stops at `3.4.29`. Linking
+with the system compiler therefore fails:
+
+```
+libGraf.so: undefined reference to ...@GLIBCXX_3.4.31
+libDelphes.so: undefined reference to ...@GLIBCXX_3.4.31
+```
+
+So the `delphes` targets are linked with **the compiler `root-config --cxx`
+reports** (`DELPHES_CXX` in the `Makefile`), with that compiler's `libstdc++`
+directory added as an rpath. Nothing to pass by hand.
+
+The consequence is a real asymmetry, and it matters in batch: `svj_regression`
+is CVMFS-independent, while `svj_regression_delphes` **hard-depends on the
+view** for ROOT and its `libstdc++`. Run `ldd` on it in a bare environment and
+six libraries (`libtbb.so.12`, `libvdt.so`) are unresolved; source
+`setup_env.sh` and they all resolve. That is fine on a worker only because
+`condor/svj_job.sh` sources the environment before running anything — do not
+invoke the Delphes binaries from a script that skips that step.
 
 ### Adding another dependency
 
@@ -382,9 +412,12 @@ python src/run_regression/scan_svj.py src/run_regression/scan_smoke.cfg
 # → simulated_smoke/svj/svj_scan.npz, param_flat (1,1,1,1,1,1,184)
 ```
 
-If you built Delphes, add one more rung. Keep it small: the detector
-simulation is far slower per event than the truth generator, and single
-threaded.
+If you built Delphes, add one more rung. Keep it small — it is single
+threaded — though the per-event cost is closer to the truth generator than you
+might expect: measured on an lxplus login node, Delphes runs at ~100 events/s
+against the truth generator's ~110 events/s on one thread, a penalty of
+**1.14× at `mZ = 500` rising to 1.28× at `mZ = 4000`** (detector cost tracks
+particle multiplicity). PYTHIA generation, not reconstruction, dominates.
 
 ```bash
 # 5. The Delphes binary runs.  20 events, one thread.       ~seconds
@@ -404,6 +437,52 @@ Step 4 uses the committed `scan_smoke.cfg` — one grid point at 2000 events.
 It writes to `simulated_smoke/`, deliberately not `simulated/`, because a
 one-point scan with `n_jobs=1` is named `svj_scan.npz` and would otherwise
 overwrite the committed 6-axis production scan.
+
+---
+
+## 5.1 Measured throughput, for sizing anything
+
+All measured on an lxplus login node (16 cores, shared, LCG_110), so treat them
+as a floor rather than a benchmark — a quiet worker node does better.
+
+**Truth generator, one thread: ~105 events/s**, linear in `nEvent`. Threading
+is close to ideal to 4 cores and then flattens, partly from contention with
+whatever else is on the login node:
+
+| threads | 1 | 2 | 4 | 8 | 16 |
+|---|---|---|---|---|---|
+| speedup | 1.00× | 1.99× | 3.64× | 6.24× | 8.86× |
+
+**A full scan point** — generation plus transforms, marginal fits and the
+copula — costs, on one thread:
+
+| `nEvent` | 2 000 | 5 000 | 10 000 | 20 000 |
+|---|---|---|---|---|
+| wall | 24.8 s | 56.5 s | 103.3 s | 205.4 s |
+
+which fits `t ≈ 4.7 s + nEvent / 99.7` — so the fitting machinery is a fixed
+~5 s per point and everything else is PYTHIA. Multiply by grid points, divide
+by `n_outer_workers × queue N`, and you have the wall time of an array.
+
+Two things worth knowing before you extrapolate:
+
+- **Cost is flat to slightly *falling* with `mZ`** (337 ev/s at `mZ = 500`
+  against 419 ev/s at `mZ = 4000`, 4 threads). There is no expensive corner of
+  the grid to plan around; a uniform per-point estimate is safe.
+- **Delphes is only ~1.15–1.3× the truth cost per event**, not the order of
+  magnitude the phrase "detector simulation" suggests — see
+  [setup_delphes.md](setup_delphes.md), "What it costs".
+
+Memory is a non-issue: `scan_svj.py` prints its own resource summary at the end
+of every run (68 MB per C++ worker, 95 MB for the Python parent at
+`nEvent = 2000`), and suggests a `--mem`. `request_memory = 2 GB` covers a
+16-worker point comfortably.
+
+> **When timing a scan, clear `output_dir` first.** `scan_svj.py` resumes from
+> an existing NPZ (§ [running-a-scan.md](running-a-scan.md), "Resume after
+> interruption"), which is what you want in production and not what you want on
+> a stopwatch: a re-run over a finished grid returns in under two seconds
+> having printed `Nothing left to do`, which looks like a spectacular result.
 
 ---
 
@@ -575,8 +654,13 @@ finds nothing.
 `request_cpus = 1` there is deliberate, not an oversight.
 `svj_regression_delphes` is single-threaded by construction — ROOT's `gRandom`
 is not thread-safe, so the binary has no `nWorkers` key at all. Scale it with
-`queue N`, never with `request_cpus`. Its `+JobFlavour` is **uncalibrated**:
-time one shard before trusting an array to it.
+`queue N`, never with `request_cpus`.
+
+Its `+JobFlavour` is now calibrated from measurement rather than guessed. At
+~100 events/s single-threaded, a 50 000-event shard is **about 8.5 minutes** of
+compute. `microcentury` (1 h) carries a comfortable margin; `espresso` (20 min)
+would fit but leaves little room for a slow worker or a slow EOS write, and
+`workday` was far more than this ever needed.
 
 ### 7.6 Production validation
 
@@ -624,23 +708,38 @@ helpers.set_svj_scan_path('/eos/user/l/lbojorqu/svj/scans/svj_scan.npz')
 
 ## 9. Known gaps
 
-- An array has not been run at full production size. The 64-point / 4-job run
-  that validated `scan.sub`'s mechanics used `request_cpus = 8` and
-  `microcentury`; `queue 16` with `request_cpus = 16` and `tomorrow` is untried.
-- **The Delphes path has never been run on lxplus.** It is written and works
-  locally (ROOT 6.34, Delphes 3.5.1), but on lxplus every one of these is
-  unconfirmed: that the LCG view's `root-config` is on `PATH` after sourcing,
-  that `tclsh` exists on the login node, how long the build takes, and whether
-  `libDelphes.so`'s `RUNPATH` into the view's ROOT resolves on a *worker* node.
-  That last one is the one to watch: it is exactly the class of bug §2 warns
-  about, and it will pass on the login node and fail in batch. Run §5 rung 5
-  and then `condor/smoke.sub` before submitting `tsv_delphes.sub`.
-- Delphes is pinned to 3.5.1 in `DELPHES_VER`, and its download URL
-  (`cp3.irmp.ucl.ac.be`) is unverified from lxplus — if it is blocked, fetch the
-  tarball by hand into `$SVJ_WORK` and re-run; `fetch()` skips anything already
-  cached there.
-- `condor/tsv_delphes.sub`'s `+JobFlavour = "workday"` is a guess. Nobody has
-  timed a detector-level shard.
+- **`request_cpus = 16` does not schedule.** This is no longer a guess. A
+  32-job, 16-core array sat idle for **10.4 hours** before one slot matched, and
+  only 2 of 32 jobs ever started; `condor_q -better-analyze` reported "1 slots
+  match and are willing to run your job, 3226 slots would match if drained".
+  The farm is made of partly-occupied machines -- roughly 110 000 single-core
+  slots against approximately one free 16-core slot -- so a 16-core request is
+  effectively a whole-node reservation.
+
+  Invert the shape instead: `request_cpus = 1`, `n_outer_workers = 1`, and many
+  more jobs. The same restructuring took the matching-slot count from 1 to
+  **1090**. `condor/scan_raw_truth.sub` carries the worked numbers.
+
+  Two things that are *not* the lever, both measured: `+JobFlavour` (a one-core
+  `espresso` canary queued just as long as a `workday` one) and job count. What
+  remains is ordinary fair-share contention, which no submit-file change fixes.
+  `scan.sub` still ships `request_cpus = 16` and should be treated as unusable
+  at production scale until it is rewritten the same way.
+- **`condor/tsv_delphes.sub` has not been submitted as an array.** The Delphes
+  binaries are built and verified on an lxplus login node (§2, §5 rung 5), and
+  the environment they need is sourced by `condor/svj_job.sh` the same way
+  every other workflow's is — but no detector-level shard has actually run on a
+  worker. The specific thing to confirm is the CVMFS dependency described in
+  §2: unlike `svj_regression`, these binaries need the view at runtime. Run
+  `condor/smoke.sub` first, then a single `queue 1` Delphes shard, before an
+  array.
+- Delphes is pinned to 3.5.1 in `DELPHES_VER`. The download URL is reachable
+  from lxplus; if that ever changes, fetch the tarball by hand into `$SVJ_WORK`
+  and re-run — `fetch()` skips anything already cached there.
+- Delphes 3.5.1 is built against whatever ROOT the pinned view ships, currently
+  **6.40.02**. That combination works, but nothing pins ROOT itself: a view
+  bump moves ROOT underneath Delphes, and `libDelphes.so` would need rebuilding
+  (`tools/build_deps.sh --only-delphes`) to match.
 - ROOT has no local-build fallback, so the pinned LCG view is a hard dependency
   for the Delphes binaries specifically. When that view is retired, the truth
   generator survives it and the Delphes ones do not.

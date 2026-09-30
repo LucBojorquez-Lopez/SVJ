@@ -134,6 +134,44 @@ SVJ/
 
 ---
 
+## What works on a fresh clone
+
+No event generation is needed to explore the interpolation — two fitted scans
+are committed, and so is a small background sample.
+
+| | scan directory | axes | grid | observables |
+|---|---|---|---|---|
+| **A** (GUI default) | `simulated/svj/working_example/` | 4: mZ, rinv_pion, mRho, alphaD | 8 192 | 11 |
+| **B** | `simulated/svj/` | 6: + mPiOverLambda, LambdaDQCD, jetR | 16 384 | 16 |
+
+```python
+show()                             # A, the 4-axis example
+show(scan_dir='simulated/svj/')    # B, the 6-axis example
+```
+
+Both give sliders, cuts, marginal and joint distributions, and — via the
+committed demo background — the background panel and the S/sqrt(B) readout.
+**PYTHIA is only needed for the VALIDATE button**, which overlays a freshly
+simulated point; everything else is served from the committed NPZs.
+
+The committed background (`background/background_events_demo.npz`, ~27 MB) is
+thinned to 20k events per sample. Its total rate is right but its MC errors are
+inflated, so the GUI flags it in red. The full 17M-event cache is 1.27 GB and
+lives outside the repository; see
+[docs/normalisation.md](docs/normalisation.md) for how it is located and how to
+rebuild it.
+
+### Status of the symbolic-regression work
+
+`src/run_regression/symbolic/` is a **standalone study**, not a GUI backend.
+`fit_symbolic.py` and `holdout.py` fit and score alternatives to the shipped
+Box-Cox/`gennorm` + linear-interpolation pipeline, and
+[docs/symbolic-regression.md](docs/symbolic-regression.md) is the measurement
+log. `SymbolicModel.interpolate()` deliberately matches
+`helpers.interpolate_svj_params`, so it is drop-in by design — but nothing wires
+it into the GUI yet, and no fitted model is committed. The GUI always uses the
+incumbent pipeline.
+
 ## Documentation
 
 Full reference documentation is in [`docs/`](docs/):
@@ -144,6 +182,10 @@ Full reference documentation is in [`docs/`](docs/):
 | Detector-level (Delphes) stream | [docs/setup_delphes.md](docs/setup_delphes.md) |
 | Running on CERN lxplus | [docs/lxplus.md](docs/lxplus.md) |
 | Running and configuring scans | [docs/running-a-scan.md](docs/running-a-scan.md) |
+| Raw event store (re-fit without re-simulating) | [docs/raw-store.md](docs/raw-store.md) |
+| Symbolic regression experiment | [docs/symbolic-regression.md](docs/symbolic-regression.md) |
+| SM backgrounds (PYTHIA + Delphes) | [docs/backgrounds.md](docs/backgrounds.md) |
+| Normalisation and S/sqrt(B) | [docs/normalisation.md](docs/normalisation.md) |
 | Adding observables, transforms, distributions | [docs/extending-observables.md](docs/extending-observables.md) |
 | Diagnostic plots | [docs/diagnostics.md](docs/diagnostics.md) |
 | Interactive GUI | [docs/gui.md](docs/gui.md) |
